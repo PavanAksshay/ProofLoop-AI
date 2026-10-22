@@ -98,3 +98,20 @@ def test_second_durable_approval_decision_is_rejected():
         assert "final outcome" in str(exc) or "already been resolved" in str(exc)
     else:
         raise AssertionError("Expected the second decision to be rejected")
+
+
+
+def test_interrupted_approval_claim_is_recovered_on_startup():
+    from app.models import ApprovalDecisionRequest, Outcome
+    from app.orchestrator import _pending_approvals, decide_approval
+    from app.store import claim_pending_approval, recover_interrupted_approval_claims
+
+    opened = run_incident(IncidentRunRequest(scenario="clean_recovery", client="client_b"))
+    _pending_approvals.pop(opened.incident_id, None)
+    assert claim_pending_approval(opened.incident_id) is not None
+    assert recover_interrupted_approval_claims() >= 1
+    completed = decide_approval(
+        opened.incident_id,
+        ApprovalDecisionRequest(decision="approve", approver_id="recovery-test"),
+    )
+    assert completed.outcome == Outcome.VERIFIED
