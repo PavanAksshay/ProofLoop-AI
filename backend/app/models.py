@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -32,6 +32,7 @@ class Outcome(str, Enum):
     UNVERIFIED = "UNVERIFIED"
     BLOCKED = "BLOCKED"
     ESCALATED = "ESCALATED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
 
 
 class Event(BaseModel):
@@ -48,6 +49,20 @@ class IncidentRunRequest(BaseModel):
     scenario: str = "clean_recovery"
     client: str = "client_a"
     mode: str = "proofloop"
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: str
+    approver_id: str = Field(min_length=1, max_length=100)
+    comment: str = Field(default="", max_length=500)
+
+    @field_validator("decision")
+    @classmethod
+    def validate_decision(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"approve", "deny"}:
+            raise ValueError("decision must be 'approve' or 'deny'")
+        return normalized
 
 
 class ToolRequest(BaseModel):
