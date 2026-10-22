@@ -15,6 +15,7 @@ from .models import (
 from .policy import evaluate_action
 from .simulator import ServiceSimulator
 from .verifier import verify_recovery
+from .store import append_event, create_incident, incident_exists
 
 
 MAX_ACTION_ATTEMPTS = 3
@@ -58,13 +59,15 @@ def _response(
 
 
 def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, payload: dict, refs: list[str] | None = None) -> None:
-    events.append(Event(
+    event = Event(
         incident_id=incident_id,
         type=event_type,
         actor=actor,
         payload=payload,
         evidence_refs=refs or [],
-    ))
+    )
+    events.append(event)
+    append_event(event)
 
 
 def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: ServiceSimulator, events: list[Event]) -> IncidentResponse:
@@ -84,14 +87,17 @@ def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: 
     return response
 
 
-def run_incident(request: IncidentRunRequest) -> IncidentResponse:
-    incident_id = str(uuid4())
+def run_incident(request: IncidentRunRequest, incident_id: str | None = None) -> IncidentResponse:
+    incident_id = incident_id or str(uuid4())
     events: list[Event] = []
 
     try:
         simulator = ServiceSimulator(request.scenario)
     except ValueError as exc:
         raise ValueError(str(exc)) from exc
+
+    if not incident_exists(incident_id):
+        create_incident(incident_id, request.scenario, request.client, Outcome.RUNNING, "Incident started.")
 
     _emit(events, incident_id, "incident_opened", Actor.SYSTEM, {
         "scenario": request.scenario,
