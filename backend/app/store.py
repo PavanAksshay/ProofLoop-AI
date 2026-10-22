@@ -265,3 +265,13 @@ def recover_interrupted_approval_claims() -> int:
                WHERE status = 'processing'"""
         )
         return int(cursor.rowcount)
+
+
+def update_incident_mode(incident_id: str, mode: str) -> None:
+    """Persist the investigator mode used for this incident."""
+    initialize_store()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE incidents SET mode = ?, updated_at = CURRENT_TIMESTAMP WHERE incident_id = ?",
+            (mode, incident_id),
+        )
