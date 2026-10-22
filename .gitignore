@@ -26,3 +26,8 @@ Thumbs.db
 # Local runtime artifacts
 *.jsonl
 logs/
+
+# Local SQLite runtime database
+*.db
+*.db-shm
+*.db-wal
