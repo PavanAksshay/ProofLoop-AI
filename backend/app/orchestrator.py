@@ -287,9 +287,27 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
 
         current_policy = evaluate_action(pending.action, pending.client)
         if current_policy.decision == PolicyDecision.BLOCKED:
+            # Policy may tighten while an approval is waiting. Record the re-check
+            # and finish safely rather than leaving the incident stuck as pending.
+            _emit(pending.events, incident_id, "approval_rejected_by_policy", Actor.GATE, {
+                "decision": current_policy.decision.value,
+                "rule_id": current_policy.rule_id,
+                "reason": current_policy.reason,
+                "message": "Policy changed or the saved action is no longer authorized; no action was executed.",
+            })
+            summary = f"Action blocked by policy at approval time: {current_policy.reason}"
+            _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {
+                "outcome": Outcome.BLOCKED.value,
+                "summary": summary,
+            })
+            response = _response(
+                incident_id, pending.scenario, pending.client, Outcome.BLOCKED,
+                summary, pending.events, mode=pending.mode,
+            )
+            _completed_incidents[incident_id] = response
             resolve_pending_approval(incident_id)
             _pending_approvals.pop(incident_id, None)
-            raise PermissionError(f"Action is now blocked by policy: {current_policy.reason}")
+            return response
 
         _emit(pending.events, incident_id, "human_approval_decision", Actor.HUMAN, {
             "approver_id": request.approver_id,
