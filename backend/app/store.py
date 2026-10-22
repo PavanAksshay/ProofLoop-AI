@@ -253,3 +253,15 @@ def release_pending_approval_claim(incident_id: str) -> None:
                WHERE incident_id = ? AND status = 'processing'""",
             (incident_id,),
         )
+
+
+
+def recover_interrupted_approval_claims() -> int:
+    """Return interrupted claims to pending at process startup for this single-worker prototype."""
+    initialize_store()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """UPDATE pending_approvals SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+               WHERE status = 'processing'"""
+        )
+        return int(cursor.rowcount)
