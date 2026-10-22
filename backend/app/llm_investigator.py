@@ -6,19 +6,24 @@ The orchestrator must still pass every proposal through the deterministic policy
 from __future__ import annotations
 
 import json
+import logging
 import os
+from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .agent import propose_next_action
 from .models import ToolRequest
 from .simulator import ServiceSimulator
 
-load_dotenv()
+logger = logging.getLogger(__name__)
+
+# Resolve the backend .env explicitly so loading does not depend on the process CWD.
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 class InvestigatorProposal(BaseModel):
@@ -46,19 +51,33 @@ def _evidence(simulator: ServiceSimulator) -> dict[str, Any]:
             {"tool": "restart_service", "arguments": {}},
             {"tool": "scale_service", "arguments": {"replicas": 2}},
             {"tool": "clear_cache", "arguments": {}},
-            {"tool": "escalate_to_human", "arguments": {"reason": "Needs human review", "summary": "Escalated for review"}},
+            {
+                "tool": "escalate_to_human",
+                "arguments": {
+                    "reason": "Needs human review",
+                    "summary": "Escalated for review",
+                },
+            },
         ],
     }
 
 
-def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+def _request_json(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     request = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", **(headers or {})},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "ProofLoop-AI/1.0",
+            **(headers or {}),
+        },
         method="POST",
     )
-    timeout = float(os.getenv("PROOFLOOP_LLM_TIMEOUT_SECONDS", "12"))
+    timeout = float(os.getenv("PROOFLOOP_LLM_TIMEOUT_SECONDS", "20"))
     with urlopen(request, timeout=max(1.0, min(timeout, 30.0))) as response:
         decoded = json.loads(response.read().decode("utf-8"))
     if not isinstance(decoded, dict):
@@ -79,9 +98,10 @@ def _provider_response(provider: str, evidence: dict[str, Any]) -> str:
         api_key = os.getenv("GROQ_API_KEY", "").strip()
         if not api_key:
             raise ValueError("GROQ_API_KEY is not configured")
-        model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
         result = _request_json(
-            os.getenv("GROQ_API_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/") + "/chat/completions",
+            os.getenv("GROQ_API_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
+            + "/chat/completions",
             {
                 "model": model,
                 "temperature": 0,
@@ -95,6 +115,7 @@ def _provider_response(provider: str, evidence: dict[str, Any]) -> str:
             {"Authorization": f"Bearer {api_key}"},
         )
         return str(result["choices"][0]["message"]["content"])
+
     if provider == "ollama":
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
         model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
@@ -112,6 +133,7 @@ def _provider_response(provider: str, evidence: dict[str, Any]) -> str:
             },
         )
         return str(result["message"]["content"])
+
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
@@ -136,7 +158,6 @@ def propose_action(simulator: ServiceSimulator) -> tuple[ToolRequest, str, list[
     if provider:
         try:
             raw = _provider_response(provider, _evidence(simulator))
-            # Some providers may wrap JSON in a markdown fence despite instructions.
             raw = raw.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -152,12 +173,14 @@ def propose_action(simulator: ServiceSimulator) -> tuple[ToolRequest, str, list[
                 ["logs:checkout-service", "config:checkout-service", "metrics:checkout-service"],
                 f"llm:{provider}",
             )
-        except (ValueError, KeyError, TypeError, ValidationError, URLError, TimeoutError, OSError, json.JSONDecodeError):
-            # Do not expose provider details or evidence contents to the API response.
-            pass
-        except Exception:
-            # SDK/provider shape changes must not prevent safe fallback.
-            pass
+        except HTTPError as exc:
+            # Log only status/type metadata, never credentials, request payloads, or provider body.
+            logger.warning("LLM provider request failed (HTTP %s); using deterministic fallback", exc.code)
+        except (ValueError, KeyError, TypeError, ValidationError, URLError, TimeoutError, OSError):
+            logger.warning("LLM provider response was unavailable or invalid; using deterministic fallback")
+        except Exception as exc:
+            # Provider changes must never prevent safe fallback. Avoid logging exception contents.
+            logger.warning("LLM provider failed (%s); using deterministic fallback", type(exc).__name__)
 
     action, rationale, refs = propose_next_action(simulator)
     return action, rationale, refs, "fallback"
