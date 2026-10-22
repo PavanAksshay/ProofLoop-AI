@@ -12,10 +12,13 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from dotenv import load_dotenv
 
 from .agent import propose_next_action
 from .models import ToolRequest
 from .simulator import ServiceSimulator
+
+load_dotenv()
 
 
 class InvestigatorProposal(BaseModel):
