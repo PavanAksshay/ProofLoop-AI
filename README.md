@@ -4,17 +4,17 @@
 
 ProofLoop AI is an AgentOps prototype for IT incident resolution. It investigates synthetic incidents, proposes remediation actions, enforces authorization through a deterministic policy gate, independently verifies service recovery, and records an evidence-backed audit trail.
 
-## Current implementation status
+## Current implementation
 
-The first backend vertical slice is being built on `sanjay/agent-policy-verifier`. It currently includes:
-- A deterministic synthetic service simulator with four core scenario labels.
-- A deny-by-default policy gate with client-specific examples.
-- A read-only verifier requiring three checks to pass.
-- A bounded rule-based investigator fallback.
-- An initial FastAPI API for health, scenario listing, and incident runs.
-- Initial pytest safety tests.
+The `sanjay/agent-policy-verifier` branch contains an early backend vertical slice:
+- Deterministic synthetic service simulator and four scenario labels.
+- Deny-by-default policy gate with client-specific rules.
+- Read-only verifier requiring three checks to pass.
+- Bounded rule-based investigator fallback.
+- FastAPI endpoints for incident runs and an explicit pause/approve/deny workflow.
+- Initial automated safety and approval-flow tests.
 
-This is an early prototype, not a production-ready IT operations tool. LLM integration, live approvals, event streaming, benchmark runner, persistence and the React dashboard are still planned. Tests have been authored but must be run locally before results are claimed.
+This is a synthetic prototype, not production-ready IT automation. The live LLM provider, persistent event store, SSE stream, baseline benchmark and React dashboard remain planned.
 
 ## Core workflow
 
@@ -23,7 +23,7 @@ This is an early prototype, not a production-ready IT operations tool. LLM integ
 3. Evaluate the action with a deterministic policy gate.
 4. Execute only authorized actions in a synthetic simulator, or pause for approval, or block.
 5. Independently verify recovery.
-6. Report `VERIFIED`, `UNVERIFIED`, `BLOCKED`, or `ESCALATED` with an audit trail.
+6. Report `VERIFIED`, `UNVERIFIED`, `BLOCKED`, `ESCALATED`, or `PENDING_APPROVAL` with an event trail.
 
 ## Planned technology
 
@@ -36,18 +36,16 @@ This is an early prototype, not a production-ready IT operations tool. LLM integ
 
 ## Quick start
 
-From the repository root:
-
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-pytest
+pytest -v
 uvicorn app.main:app --reload
 ```
 
-Then open `http://127.0.0.1:8000/docs` for the API explorer or `http://127.0.0.1:8000/health` for the health endpoint.
+API docs: `http://127.0.0.1:8000/docs`
 
 ## Team ownership
 
@@ -64,6 +62,10 @@ Agree on shared schemas and tool/API contracts before changing them.
 - The verifier is read-only and does not trust operator claims.
 - Retries are bounded; uncertain outcomes are escalated.
 - Never commit API keys or credentials.
+
+## Approval workflow limitation
+
+The current approval flow stores pending requests in process memory. The `approver_id` field is an audit label, not authentication. This endpoint is for a local controlled demo only; do not expose it to untrusted networks.
 
 ## Evaluation
 
