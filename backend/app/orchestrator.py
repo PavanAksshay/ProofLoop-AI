@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
-from .agent import propose_next_action
+from .llm_investigator import propose_action
 from .models import (
     Actor,
     ApprovalDecisionRequest,
@@ -42,6 +42,7 @@ class PendingApproval:
     attempt: int
     rule_id: str
     reason: str
+    mode: str = "fallback"
 
 
 # Prototype-only process memory. Restarting the server clears pending approvals.
@@ -56,6 +57,7 @@ def _response(
     outcome: Outcome,
     summary: str,
     events: list[Event],
+    mode: str = "fallback",
 ) -> IncidentResponse:
     return IncidentResponse(
         incident_id=incident_id,
@@ -63,7 +65,7 @@ def _response(
         client=client,
         outcome=outcome,
         summary=summary,
-        mode="fallback",
+        mode=mode,
         events=events,
     )
 
@@ -112,7 +114,7 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
     _emit(events, incident_id, "incident_opened", Actor.SYSTEM, {
         "scenario": request.scenario,
         "client": request.client,
-        "mode": request.mode,
+        "requested_mode": request.mode,
     })
     logs = simulator.read_logs("checkout-service").result.get("logs", [])
     _emit(events, incident_id, "evidence_collected", Actor.TOOL, {"source": "logs", "excerpt": logs}, ["logs:checkout-service"])
@@ -124,11 +126,14 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
 
     outcome = Outcome.ESCALATED
     summary = "Incident reached a safe stop without a verified recovery."
+    response_mode = "fallback"
 
     for attempt in range(MAX_ACTION_ATTEMPTS):
-        action, rationale, evidence_refs = propose_next_action(simulator)
+        action, rationale, evidence_refs, selected_mode = propose_action(simulator)
+        response_mode = selected_mode
         _emit(events, incident_id, "action_proposed", Actor.AGENT, {
             "attempt": attempt + 1,
+            "mode": selected_mode,
             "tool": action.tool,
             "service": action.service,
             "arguments": action.arguments,
@@ -166,6 +171,7 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
                 attempt=attempt + 1,
                 rule_id=decision.rule_id,
                 reason=decision.reason,
+                mode=selected_mode,
             )
             _pending_approvals[incident_id] = pending
             save_pending_approval(incident_id, {
@@ -177,12 +183,14 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
                 "attempt": attempt + 1,
                 "rule_id": decision.rule_id,
                 "reason": decision.reason,
+                "mode": selected_mode,
             })
             response = _response(
                 incident_id, request.scenario, request.client,
                 Outcome.PENDING_APPROVAL,
                 "Waiting for an explicit human approval decision. No action has been executed.",
                 events,
+                mode=selected_mode,
             )
             return response
 
@@ -213,7 +221,7 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
             break
 
     _emit(events, incident_id, "outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
-    response = _response(incident_id, request.scenario, request.client, outcome, summary, events)
+    response = _response(incident_id, request.scenario, request.client, outcome, summary, events, mode=response_mode)
     _completed_incidents[incident_id] = response
     return response
 
@@ -247,6 +255,7 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
                 attempt=int(saved["attempt"]),
                 rule_id=saved["rule_id"],
                 reason=saved["reason"],
+                mode=saved.get("mode", "fallback"),
             )
             _pending_approvals[incident_id] = pending
         except Exception as exc:
@@ -272,6 +281,7 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
         pending.attempt = int(claimed["attempt"])
         pending.rule_id = claimed["rule_id"]
         pending.reason = claimed["reason"]
+        pending.mode = claimed.get("mode", pending.mode)
 
         current_policy = evaluate_action(pending.action, pending.client)
         if current_policy.decision == PolicyDecision.BLOCKED:
@@ -289,7 +299,7 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
         if request.decision == "deny":
             summary = "The proposed action was denied by a human; no action was executed."
             _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.BLOCKED.value, "summary": summary})
-            response = _response(incident_id, pending.scenario, pending.client, Outcome.BLOCKED, summary, pending.events)
+            response = _response(incident_id, pending.scenario, pending.client, Outcome.BLOCKED, summary, pending.events, mode=pending.mode)
             _completed_incidents[incident_id] = response
             resolve_pending_approval(incident_id)
             _pending_approvals.pop(incident_id, None)
@@ -310,7 +320,7 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
         if not result.success:
             summary = "The approved action failed to execute; the incident was escalated."
             _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.ESCALATED.value, "summary": summary})
-            response = _response(incident_id, pending.scenario, pending.client, Outcome.ESCALATED, summary, pending.events)
+            response = _response(incident_id, pending.scenario, pending.client, Outcome.ESCALATED, summary, pending.events, mode=pending.mode)
             _completed_incidents[incident_id] = response
             resolve_pending_approval(incident_id)
             return response
@@ -336,5 +346,6 @@ def get_incident(incident_id: str) -> IncidentResponse | None:
             Outcome.PENDING_APPROVAL,
             "Waiting for an explicit human approval decision. No action has been executed.",
             pending.events,
+            mode=pending.mode,
         )
     return _completed_incidents.get(incident_id)
