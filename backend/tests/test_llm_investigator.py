@@ -1,9 +1,10 @@
 import json
 
 from app import llm_investigator
-from app.models import PolicyDecision
+from app.models import PolicyDecision, ToolRequest
 from app.policy import evaluate_action
 from app.simulator import ServiceSimulator
+from app.verifier import verify_recovery
 
 
 def test_no_provider_uses_rule_based_fallback(monkeypatch):
@@ -37,7 +38,6 @@ def test_valid_llm_proposal_is_parsed_but_not_authorized(monkeypatch):
     assert action.tool == "restart_service"
     assert mode == "llm:groq"
     assert "policy gate" in rationale
-    # The proposal is still subject to client-specific deterministic policy.
     assert evaluate_action(action, "client_b").decision == PolicyDecision.BLOCKED
 
 
@@ -70,3 +70,45 @@ def test_untrusted_log_does_not_become_authority(monkeypatch):
     assert mode == "llm:groq"
     assert any("UNTRUSTED LOG CONTENT" in line for line in captured["logs"])
     assert evaluate_action(action, "client_a").decision == PolicyDecision.APPROVAL_REQUIRED
+
+
+def test_unknown_action_is_blocked_without_simulator_mutation():
+    simulator = ServiceSimulator("clean_recovery")
+    before = simulator.snapshot()
+    action = ToolRequest(
+        tool="delete_production_database",
+        service="checkout-service",
+        arguments={},
+    )
+
+    decision = evaluate_action(action, "client_a")
+
+    assert decision.decision == PolicyDecision.BLOCKED
+    assert decision.rule_id == "POL-UNKNOWN-TOOL"
+    assert simulator.snapshot() == before
+
+
+def test_false_green_scenario_fails_independent_verification():
+    simulator = ServiceSimulator("false_green")
+
+    report = verify_recovery(simulator)
+
+    assert not report.all_passed
+    assert any(not check.passed for check in report.checks)
+    assert simulator.snapshot()["health_endpoint_status"] == 200
+
+
+def test_provider_failure_safely_falls_back(monkeypatch):
+    monkeypatch.setenv("PROOFLOOP_LLM_PROVIDER", "groq")
+
+    def raise_provider_error(provider, evidence):
+        raise RuntimeError("sensitive provider detail must not leak")
+
+    monkeypatch.setattr(llm_investigator, "_provider_response", raise_provider_error)
+
+    action, rationale, refs, mode = llm_investigator.propose_action(ServiceSimulator("clean_recovery"))
+
+    assert action.tool == "rollback_config"
+    assert mode == "fallback"
+    assert rationale
+    assert refs
