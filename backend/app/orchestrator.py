@@ -25,6 +25,7 @@ from .store import (
     release_pending_approval_claim,
     resolve_pending_approval,
     save_pending_approval,
+    update_incident_mode,
 )
 
 
@@ -82,7 +83,7 @@ def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, 
     append_event(event)
 
 
-def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: ServiceSimulator, events: list[Event]) -> IncidentResponse:
+def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: ServiceSimulator, events: list[Event], mode: str = "fallback") -> IncidentResponse:
     report = verify_recovery(simulator)
     for check in report.checks:
         _emit(events, incident_id, "verification_check", Actor.VERIFIER, check.model_dump(mode="json"))
@@ -94,7 +95,7 @@ def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: 
         outcome = Outcome.ESCALATED
         summary = "Recovery could not be proven; the incident was escalated."
     _emit(events, incident_id, "outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
-    response = _response(incident_id, scenario, client, outcome, summary, events)
+    response = _response(incident_id, scenario, client, outcome, summary, events, mode=mode)
     _completed_incidents[incident_id] = response
     return response
 
@@ -131,6 +132,7 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
     for attempt in range(MAX_ACTION_ATTEMPTS):
         action, rationale, evidence_refs, selected_mode = propose_action(simulator)
         response_mode = selected_mode
+        update_incident_mode(incident_id, selected_mode)
         _emit(events, incident_id, "action_proposed", Actor.AGENT, {
             "attempt": attempt + 1,
             "mode": selected_mode,
@@ -326,7 +328,7 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
             return response
 
         response = _verify_and_report(
-            incident_id, pending.scenario, pending.client, pending.simulator, pending.events
+            incident_id, pending.scenario, pending.client, pending.simulator, pending.events, mode=pending.mode
         )
         resolve_pending_approval(incident_id)
         return response
