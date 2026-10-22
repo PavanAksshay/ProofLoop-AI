@@ -1,11 +1,9 @@
 """End-to-end API contract checks using the real orchestrator and isolated persistence."""
 
-import json
-
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, orchestrator
+from app import main, orchestrator, store
 from app.models import Outcome
 
 
@@ -13,6 +11,7 @@ from app.models import Outcome
 def isolate_runtime(monkeypatch):
     # The contract suite must never touch the developer's local SQLite file.
     monkeypatch.setattr(main, "initialize_store", lambda: None)
+    monkeypatch.setattr(store, "recover_interrupted_approval_claims", lambda: 0)
     monkeypatch.setattr(orchestrator, "incident_exists", lambda incident_id: False)
     monkeypatch.setattr(orchestrator, "create_incident", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrator, "append_event", lambda event: None)
@@ -27,7 +26,6 @@ def isolate_runtime(monkeypatch):
     monkeypatch.setattr(main, "incident_exists", lambda incident_id: False)
     monkeypatch.setattr(main, "events_after", lambda incident_id, after: [])
     monkeypatch.setattr(main, "create_incident", lambda *args, **kwargs: None)
-    monkeypatch.setattr(main, "update_incident_status", lambda *args, **kwargs: None)
     monkeypatch.setenv("PROOFLOOP_LLM_PROVIDER", "fallback")
     orchestrator._pending_approvals.clear()
     orchestrator._completed_incidents.clear()
