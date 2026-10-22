@@ -47,3 +47,54 @@ def test_sse_supports_resume_cursor():
     assert stream.status_code == 200
     assert "event: incident_opened" not in stream.text
     assert "event: outcome" in stream.text
+
+
+
+def test_pending_approval_survives_orchestrator_memory_clear():
+    from app.models import ApprovalDecisionRequest, Outcome
+    from app.orchestrator import _pending_approvals, decide_approval
+
+    opened = run_incident(IncidentRunRequest(scenario="clean_recovery", client="client_b"))
+    assert opened.outcome == Outcome.PENDING_APPROVAL
+    _pending_approvals.pop(opened.incident_id, None)  # Simulate a process restart.
+    completed = decide_approval(
+        opened.incident_id,
+        ApprovalDecisionRequest(decision="approve", approver_id="restart-test"),
+    )
+    assert completed.outcome == Outcome.VERIFIED
+    assert any(event.type == "human_approval_decision" for event in completed.events)
+    assert any(
+        event.type == "tool_executed" and event.payload.get("approved_by") == "restart-test"
+        for event in completed.events
+    )
+
+
+def test_durable_denial_after_memory_clear_never_executes_action():
+    from app.models import ApprovalDecisionRequest, Outcome
+    from app.orchestrator import _pending_approvals, decide_approval
+
+    opened = run_incident(IncidentRunRequest(scenario="clean_recovery", client="client_b"))
+    _pending_approvals.pop(opened.incident_id, None)
+    completed = decide_approval(
+        opened.incident_id,
+        ApprovalDecisionRequest(decision="deny", approver_id="restart-test", comment="Denied after restart"),
+    )
+    assert completed.outcome == Outcome.BLOCKED
+    assert not any(event.type == "tool_executed" for event in completed.events)
+    assert any(event.type == "human_approval_decision" for event in completed.events)
+
+
+def test_second_durable_approval_decision_is_rejected():
+    from app.models import ApprovalDecisionRequest
+    from app.orchestrator import _pending_approvals, decide_approval
+
+    opened = run_incident(IncidentRunRequest(scenario="clean_recovery", client="client_b"))
+    _pending_approvals.pop(opened.incident_id, None)
+    decision = ApprovalDecisionRequest(decision="approve", approver_id="restart-test")
+    decide_approval(opened.incident_id, decision)
+    try:
+        decide_approval(opened.incident_id, decision)
+    except ValueError as exc:
+        assert "final outcome" in str(exc) or "already been resolved" in str(exc)
+    else:
+        raise AssertionError("Expected the second decision to be rejected")
