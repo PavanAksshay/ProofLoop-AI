@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -19,18 +20,22 @@ from .store import (
 )
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Initialize persistence and recover interrupted approval claims on startup."""
+    initialize_store()
+    from .store import recover_interrupted_approval_claims
+
+    recover_interrupted_approval_claims()
+    yield
+
+
 app = FastAPI(
     title="ProofLoop AI",
     description="Policy-governed incident resolution with independent recovery verification.",
     version="0.3.0",
+    lifespan=lifespan,
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    initialize_store()
-    from .store import recover_interrupted_approval_claims
-    recover_interrupted_approval_claims()
 
 
 @app.get("/health")
