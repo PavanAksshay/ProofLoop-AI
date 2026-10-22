@@ -12,11 +12,12 @@ The `sanjay/agent-policy-verifier` branch contains an early backend vertical sli
 - Read-only verifier requiring three checks to pass.
 - Bounded rule-based investigator fallback.
 - FastAPI incident execution and explicit pause/approve/deny workflow.
-- SQLite-backed incident metadata and append-only event history.
+- SQLite-backed incident metadata, append-only event history and pending approval snapshots.
+- Atomic approval claims to reject duplicate/concurrent decisions in the single-worker prototype.
 - Background incident start endpoint and resumable Server-Sent Events (SSE) stream.
 - Automated safety, approval-flow and persistence tests.
 
-This is a synthetic prototype, not production-ready IT automation. Live LLM integration, durable restoration of pending simulator approvals, benchmark runner and React dashboard remain planned.
+This is a synthetic prototype, not production-ready IT automation. Live LLM integration, benchmark runner and React dashboard remain planned.
 
 ## Core workflow
 
@@ -30,9 +31,9 @@ This is a synthetic prototype, not production-ready IT automation. Live LLM inte
 ## Technology
 
 - Backend: Python, FastAPI, Uvicorn, Pydantic
-- Persistence: SQLite event and incident store
+- Persistence: SQLite event, incident and approval store
 - Live updates: Server-Sent Events (SSE)
-- LLM: event-approved provider behind a swappable interface, with a rule-based fallback
+- LLM: rule-based fallback currently; provider integration planned
 - Frontend: React, TypeScript, Vite (planned)
 - Testing: pytest
 
@@ -67,7 +68,7 @@ Agree on shared schemas and tool/API contracts before changing them.
 
 ## Security and durability limitations
 
-The approval flow is for a local controlled demo only. `approver_id` is not authentication. Incident history is persisted in SQLite, but pending approval execution context remains in process memory and is not restored after restart. Production use requires authenticated approval, authorization, durable pending-action state, concurrency controls and operational hardening.
+Pending approval requests now persist their exact action and simulator snapshot, can be reconstructed after restart, and use an atomic SQLite claim to prevent duplicate decisions. Startup recovery is intended for a single-worker synthetic demo only. Real infrastructure actions require durable execution receipts, idempotency and reconciliation before retrying interrupted work. `approver_id` is not authentication; keep the approval endpoint local and protected. Production use requires authenticated approval, authorization and operational hardening.
 
 ## Evaluation
 
