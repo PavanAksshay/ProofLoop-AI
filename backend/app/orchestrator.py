@@ -15,7 +15,17 @@ from .models import (
 from .policy import evaluate_action
 from .simulator import ServiceSimulator
 from .verifier import verify_recovery
-from .store import append_event, create_incident, incident_exists
+from .store import (
+    append_event,
+    claim_pending_approval,
+    create_incident,
+    get_incident_response,
+    get_pending_approval,
+    incident_exists,
+    release_pending_approval_claim,
+    resolve_pending_approval,
+    save_pending_approval,
+)
 
 
 MAX_ACTION_ATTEMPTS = 3
@@ -158,6 +168,16 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
                 reason=decision.reason,
             )
             _pending_approvals[incident_id] = pending
+            save_pending_approval(incident_id, {
+                "incident_id": incident_id,
+                "scenario": request.scenario,
+                "client": request.client,
+                "simulator_snapshot": simulator.snapshot(),
+                "action": action.model_dump(mode="json"),
+                "attempt": attempt + 1,
+                "rule_id": decision.rule_id,
+                "reason": decision.reason,
+            })
             response = _response(
                 incident_id, request.scenario, request.client,
                 Outcome.PENDING_APPROVAL,
@@ -200,55 +220,112 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
 
 def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> IncidentResponse:
     pending = _pending_approvals.get(incident_id)
+
+    # Rehydrate the exact action and simulator state after a process restart.
     if pending is None:
-        if incident_id in _completed_incidents:
+        saved = get_pending_approval(incident_id)
+        if saved is None:
+            existing = get_incident_response(incident_id)
+            if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
+                raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
+            if existing is not None and existing.outcome == Outcome.PENDING_APPROVAL:
+                raise ValueError("This approval is already being processed or has an invalid pending state.")
+            raise KeyError("No pending approval exists for this incident.")
+        try:
+            simulator = ServiceSimulator.from_snapshot(saved["scenario"], saved["simulator_snapshot"])
+            action = ToolRequest.model_validate(saved["action"])
+            stored_response = get_incident_response(incident_id)
+            if stored_response is None:
+                raise ValueError("Persisted incident history is missing.")
+            pending = PendingApproval(
+                incident_id=incident_id,
+                scenario=saved["scenario"],
+                client=saved["client"],
+                simulator=simulator,
+                events=stored_response.events,
+                action=action,
+                attempt=int(saved["attempt"]),
+                rule_id=saved["rule_id"],
+                reason=saved["reason"],
+            )
+            _pending_approvals[incident_id] = pending
+        except Exception as exc:
+            raise ValueError("Persisted approval state could not be restored safely.") from exc
+
+    # Claim in SQLite before execution. Concurrent or repeated decisions cannot both win.
+    claimed = claim_pending_approval(incident_id)
+    if claimed is None:
+        _pending_approvals.pop(incident_id, None)
+        existing = get_incident_response(incident_id)
+        if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
             raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
-        raise KeyError("No pending approval exists for this incident.")
+        raise ValueError("This approval is already being processed or has already been resolved.")
 
-    # Re-evaluate the policy against the exact stored action. A client approval
-    # cannot change the tool, service, or arguments that were originally proposed.
-    current_policy = evaluate_action(pending.action, pending.client)
-    if current_policy.decision == PolicyDecision.BLOCKED:
-        del _pending_approvals[incident_id]
-        raise PermissionError(f"Action is now blocked by policy: {current_policy.reason}")
+    # Use the durable payload as the source of truth, including on the original process.
+    try:
+        pending.simulator = ServiceSimulator.from_snapshot(
+            claimed["scenario"], claimed["simulator_snapshot"]
+        )
+        pending.action = ToolRequest.model_validate(claimed["action"])
+        pending.scenario = claimed["scenario"]
+        pending.client = claimed["client"]
+        pending.attempt = int(claimed["attempt"])
+        pending.rule_id = claimed["rule_id"]
+        pending.reason = claimed["reason"]
 
-    _emit(pending.events, incident_id, "human_approval_decision", Actor.HUMAN, {
-        "approver_id": request.approver_id,
-        "decision": request.decision,
-        "comment": request.comment,
-        "rule_id": pending.rule_id,
-    })
+        current_policy = evaluate_action(pending.action, pending.client)
+        if current_policy.decision == PolicyDecision.BLOCKED:
+            resolve_pending_approval(incident_id)
+            _pending_approvals.pop(incident_id, None)
+            raise PermissionError(f"Action is now blocked by policy: {current_policy.reason}")
 
-    if request.decision == "deny":
-        del _pending_approvals[incident_id]
-        summary = "The proposed action was denied by a human; no action was executed."
-        _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.BLOCKED.value, "summary": summary})
-        response = _response(incident_id, pending.scenario, pending.client, Outcome.BLOCKED, summary, pending.events)
-        _completed_incidents[incident_id] = response
+        _emit(pending.events, incident_id, "human_approval_decision", Actor.HUMAN, {
+            "approver_id": request.approver_id,
+            "decision": request.decision,
+            "comment": request.comment,
+            "rule_id": pending.rule_id,
+        })
+
+        if request.decision == "deny":
+            summary = "The proposed action was denied by a human; no action was executed."
+            _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.BLOCKED.value, "summary": summary})
+            response = _response(incident_id, pending.scenario, pending.client, Outcome.BLOCKED, summary, pending.events)
+            _completed_incidents[incident_id] = response
+            resolve_pending_approval(incident_id)
+            _pending_approvals.pop(incident_id, None)
+            return response
+
+        result = pending.simulator.execute(pending.action)
+        _emit(pending.events, incident_id, "tool_executed", Actor.TOOL, {
+            "tool": pending.action.tool,
+            "arguments": pending.action.arguments,
+            "success": result.success,
+            "message": result.message,
+            "result": result.result,
+            "error": result.error,
+            "approved_by": request.approver_id,
+        })
+        _pending_approvals.pop(incident_id, None)
+
+        if not result.success:
+            summary = "The approved action failed to execute; the incident was escalated."
+            _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.ESCALATED.value, "summary": summary})
+            response = _response(incident_id, pending.scenario, pending.client, Outcome.ESCALATED, summary, pending.events)
+            _completed_incidents[incident_id] = response
+            resolve_pending_approval(incident_id)
+            return response
+
+        response = _verify_and_report(
+            incident_id, pending.scenario, pending.client, pending.simulator, pending.events
+        )
+        resolve_pending_approval(incident_id)
         return response
-
-    result = pending.simulator.execute(pending.action)
-    _emit(pending.events, incident_id, "tool_executed", Actor.TOOL, {
-        "tool": pending.action.tool,
-        "arguments": pending.action.arguments,
-        "success": result.success,
-        "message": result.message,
-        "result": result.result,
-        "error": result.error,
-        "approved_by": request.approver_id,
-    })
-    del _pending_approvals[incident_id]
-
-    if not result.success:
-        summary = "The approved action failed to execute; the incident was escalated."
-        _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.ESCALATED.value, "summary": summary})
-        response = _response(incident_id, pending.scenario, pending.client, Outcome.ESCALATED, summary, pending.events)
-        _completed_incidents[incident_id] = response
-        return response
-
-    return _verify_and_report(
-        incident_id, pending.scenario, pending.client, pending.simulator, pending.events
-    )
+    except PermissionError:
+        raise
+    except Exception:
+        # A transient unexpected error must not permanently strand the approval.
+        release_pending_approval_claim(incident_id)
+        raise
 
 
 def get_incident(incident_id: str) -> IncidentResponse | None:
