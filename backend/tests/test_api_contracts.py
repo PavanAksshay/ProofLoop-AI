@@ -3,16 +3,23 @@
 These tests isolate HTTP behavior from the developer's local SQLite database and
 external LLM providers. Execution-policy behavior is covered by orchestrator tests.
 """
+import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, store
 from app.models import (
     Actor,
-    ApprovalDecisionRequest,
     Event,
     IncidentResponse,
     Outcome,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_startup(monkeypatch):
+    """Keep API contract tests from initializing or recovering the developer database."""
+    monkeypatch.setattr(main, "initialize_store", lambda: None)
+    monkeypatch.setattr(store, "recover_interrupted_approval_claims", lambda: None)
 
 
 def _response(incident_id: str = "api-test-incident", outcome: Outcome = Outcome.VERIFIED):
