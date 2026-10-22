@@ -167,3 +167,30 @@ def test_incident_list_rejects_out_of_range_limit(monkeypatch):
         response = client.get("/incidents?limit=0")
 
     assert response.status_code == 422
+
+def test_approval_endpoint_persists_final_outcome_and_events(monkeypatch):
+    response_model = _response(incident_id="incident-1", outcome=Outcome.BLOCKED)
+    persisted_events = []
+    persisted_status = []
+
+    monkeypatch.setattr(main, "decide_approval", lambda incident_id, request: response_model)
+    monkeypatch.setattr(store, "append_event", lambda event: persisted_events.append(event))
+    monkeypatch.setattr(
+        store,
+        "update_incident_status",
+        lambda incident_id, outcome, summary: persisted_status.append((incident_id, outcome, summary)),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/incidents/incident-1/approval",
+            json={"decision": "deny", "approver_id": "reviewer-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "BLOCKED"
+    assert len(persisted_events) == len(response_model.events)
+    assert persisted_status == [
+        ("incident-1", Outcome.BLOCKED, response_model.summary)
+    ]
+
