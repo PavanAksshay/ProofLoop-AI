@@ -1,14 +1,14 @@
 from fastapi import FastAPI, HTTPException
 
-from .models import IncidentResponse, IncidentRunRequest
-from .orchestrator import run_incident
+from .models import ApprovalDecisionRequest, IncidentResponse, IncidentRunRequest
+from .orchestrator import decide_approval, get_incident, run_incident
 from .simulator import SUPPORTED_SCENARIOS
 
 
 app = FastAPI(
     title="ProofLoop AI",
     description="Policy-governed incident resolution with independent recovery verification.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 
@@ -28,3 +28,23 @@ def create_incident(request: IncidentRunRequest) -> IncidentResponse:
         return run_incident(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/incidents/{incident_id}", response_model=IncidentResponse)
+def read_incident(incident_id: str) -> IncidentResponse:
+    response = get_incident(incident_id)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return response
+
+
+@app.post("/incidents/{incident_id}/approval", response_model=IncidentResponse)
+def submit_approval(incident_id: str, request: ApprovalDecisionRequest) -> IncidentResponse:
+    try:
+        return decide_approval(incident_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
