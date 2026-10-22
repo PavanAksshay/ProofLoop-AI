@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 
 from .models import ApprovalDecisionRequest, IncidentResponse, IncidentRunRequest, Outcome
 from .orchestrator import decide_approval, get_incident, run_incident
+from .llm_investigator import configured_mode
 from .simulator import SUPPORTED_SCENARIOS
 from .store import (
     create_incident,
@@ -34,7 +35,7 @@ def startup() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "active_mode": "fallback", "implementation": "synthetic-prototype"}
+    return {"status": "ok", "configured_mode": configured_mode(), "implementation": "synthetic-prototype"}
 
 
 @app.get("/scenarios")
