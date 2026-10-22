@@ -36,7 +36,7 @@ Events are appended to SQLite as they are emitted. The SSE stream uses a monoton
 - `APPROVAL_REQUIRED`: wait for an explicit human decision; simulator state must remain unchanged while waiting.
 - `BLOCKED`: do not execute; record a rule identifier and reason.
 
-The approval endpoint acts only on the exact stored action; the caller cannot replace the tool or its arguments during approval. Denial records the decision and does not execute the action. Duplicate decisions are rejected.
+The approval endpoint acts only on the exact stored action; the caller cannot replace the tool or its arguments during approval. Denial records the decision and does not execute the action. Pending approvals and simulator snapshots are persisted. SQLite atomically claims each approval so only one decision can win in the single-worker prototype. Duplicate decisions are rejected.
 
 Default policy is deny unless an action is explicitly allowed. High-risk database mutations always require approval or are blocked.
 
@@ -51,14 +51,14 @@ A health endpoint returning HTTP 200 is not sufficient. The verifier must use a 
 
 ## Persistence and event API
 
-- SQLite stores incident metadata and event history.
+- SQLite stores incident metadata, event history and pending approval execution snapshots.
 - `POST /incidents/start` starts a background run and returns an incident ID.
 - `GET /incidents` lists recent incidents.
 - `GET /incidents/{incident_id}` retrieves incident history.
 - `GET /incidents/{incident_id}/events` streams persisted events using SSE and supports an `after` sequence cursor.
-- `POST /incidents/{incident_id}/approval` accepts explicit approval or denial.
+- `POST /incidents/{incident_id}/approval` accepts explicit approval or denial and rehydrates the exact stored action after restart.
 
-Pending approval execution context is still process-local and is not recovered after restart; persisted history should not be confused with durable workflow resumption.
+Interrupted approval claims are returned to pending at application startup for the local single-worker prototype. Do not enable multiple application workers with this startup recovery approach. Production integrations need action idempotency, execution receipts, leases and reconciliation to avoid replaying an action after a crash.
 
 ## Initial tool contract
 
@@ -80,7 +80,7 @@ No shell or arbitrary-command tool is exposed to the agent.
 
 ## Security limitations
 
-The current approval workflow is an unauthenticated local prototype. `approver_id` is an audit label, not proof of identity. Do not expose the endpoint to untrusted networks. Production requires authentication, authorization, durable pending action state, and concurrency-safe approval handling.
+The current approval workflow is an unauthenticated local prototype. `approver_id` is an audit label, not proof of identity. Do not expose the endpoint to untrusted networks. Production requires authentication, authorization, durable audit controls and concurrency-safe approval handling.
 
 ## Implementation strategy
 
