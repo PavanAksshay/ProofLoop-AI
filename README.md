@@ -2,61 +2,77 @@
 
 > Every fix must be authorized. Every recovery must be proven.
 
-ProofLoop AI is a proposed AgentOps 2026 prototype for IT incident resolution. It investigates synthetic incidents, proposes remediation actions, enforces authorization through a deterministic policy gate, independently verifies service recovery, and records an evidence-backed audit trail.
+ProofLoop AI is an AgentOps prototype for IT incident resolution. It investigates synthetic incidents, proposes remediation actions, enforces authorization through a deterministic policy gate, independently verifies service recovery, and records an evidence-backed audit trail.
 
-## Project status
+## Current implementation
 
-This repository has been created for the AgentOps 2026 hackathon. The working implementation will be developed during the event's permitted coding window, subject to organizer rules. Until those rules are confirmed, this repository contains project framing only; no working implementation is included.
+The `sanjay/agent-policy-verifier` branch contains an early backend vertical slice:
+- Deterministic synthetic service simulator and four scenario labels.
+- Deny-by-default policy gate with client-specific rules.
+- Read-only verifier requiring three checks to pass.
+- Optional Groq/Ollama investigator with structured-output validation and a bounded deterministic fallback.
+- FastAPI incident execution and explicit pause/approve/deny workflow.
+- SQLite-backed incident metadata, append-only event history and pending approval snapshots.
+- Atomic approval claims to reject duplicate/concurrent decisions in the single-worker prototype.
+- Background incident start endpoint and resumable Server-Sent Events (SSE) stream.
+- Automated safety, approval-flow, persistence and orchestrator execution-boundary tests.
+- GitHub Actions workflow that runs the backend pytest suite on pushes and pull requests.
 
-## Planned core workflow
+This is a synthetic prototype, not production-ready IT automation. The backend's optional LLM provider integration is implemented; the benchmark runner and React dashboard are separate workstreams and are not yet integrated.
 
-1. Ingest incident details, logs, metrics, runbooks, service topology, and client policy.
+## Core workflow
+
+1. Ingest incident details, logs, configuration, metrics, runbooks and client policy.
 2. Investigate evidence and propose a remediation action.
 3. Evaluate the action with a deterministic policy gate.
-4. Execute only authorized actions in a synthetic service simulator, or pause for human approval, or block.
-5. Run independent read-only verification.
-6. Report `VERIFIED`, `UNVERIFIED`, `BLOCKED`, or `ESCALATED` with an audit trail.
+4. Execute only authorized actions in a synthetic simulator, or pause for approval, or block.
+5. Independently verify recovery.
+6. Report `VERIFIED`, `UNVERIFIED`, `BLOCKED`, `ESCALATED`, or `PENDING_APPROVAL` with an event trail.
 
-## Planned technology
+## Technology
 
 - Backend: Python, FastAPI, Uvicorn, Pydantic
-- LLM: event-approved provider, with a rule-based fallback
-- Frontend: React, TypeScript, Vite
+- Persistence: SQLite event, incident and approval store
 - Live updates: Server-Sent Events (SSE)
+- LLM: optional Groq or Ollama provider; deterministic rule-based fallback when disabled or unavailable
+- Frontend: React, TypeScript, Vite (planned)
 - Testing: pytest
-- Event log: JSONL
 
-Provider access, network availability, allowed scaffolding, and judging requirements must be confirmed with the organizers.
+## Quick start
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pytest -q
+uvicorn app.main:app --reload
+```
+
+API docs: `http://127.0.0.1:8000/docs`
+
+The test suite deliberately defaults to the deterministic fallback and does not require API credentials. Use `backend/.env.example` as a safe starting point for local configuration, then copy it to `backend/.env` if needed. To use Groq, set `PROOFLOOP_LLM_PROVIDER=groq` and add your `GROQ_API_KEY`; for a local Ollama server, set `PROOFLOOP_LLM_PROVIDER=ollama` and configure `OLLAMA_BASE_URL` / `OLLAMA_MODEL`. Never commit `.env` or provider credentials.
 
 ## Team ownership
 
-- **Sanjayram:** agent orchestration, policy gate, verifier, event flow, integration, and safety tests.
-- **Pavan Aksshay:** synthetic simulator, controlled tools, fault scenarios, dashboard, and baseline runner.
+- **Sanjayram:** agent orchestration, policy gate, verifier, event flow, API, safety tests and integration.
+- **Pavan Aksshay:** synthetic simulator, controlled tools, fault scenarios, baseline runner and React dashboard.
 
-The team will agree on shared contracts before implementation to minimize integration risk.
+Agree on shared schemas and tool/API contracts before changing them.
 
 ## Safety principles
 
 - The LLM proposes; deterministic code authorizes and executes.
-- The policy gate denies actions by default unless explicitly permitted.
-- Logs, tickets, and runbooks are untrusted data, not authority.
-- The verifier is read-only and does not trust the operator's success claims.
-- Incident retries and tool actions are bounded; uncertain outcomes are escalated.
+- Unknown tools and out-of-scope actions are blocked.
+- Logs, tickets and runbooks are untrusted data, never authorization instructions.
+- The verifier is read-only and does not trust operator claims.
+- Retries are bounded; uncertain outcomes are escalated.
 - Never commit API keys or credentials.
 
-## Planned scenarios
+## Security and durability limitations
 
-- Clean recovery after a faulty configuration
-- False-green health endpoint while checkout transactions fail
-- Stale runbook contradicted by observed evidence
-- Hostile log attempting to induce an unauthorized action
-
-Additional tests may cover partial recovery, unavailable tools, repeated failures, conflicting evidence, approval workflows, and client-specific policy differences.
+Pending approval requests now persist their exact action and simulator snapshot, can be reconstructed after restart, and use an atomic SQLite claim to prevent duplicate decisions. Startup recovery is intended for a single-worker synthetic demo only. Real infrastructure actions require durable execution receipts, idempotency and reconciliation before retrying interrupted work. `approver_id` is not authentication; keep the approval endpoint local and protected. Production use requires authenticated approval, authorization and operational hardening.
 
 ## Evaluation
 
-A live benchmark will compare ProofLoop with a clearly described scripted baseline on the same synthetic scenarios. Metrics will be measured during execution; no performance results are claimed in advance.
-
-## Repository workflow
-
-Feature work should remain isolated on contributor branches and be integrated through review. Confirm the organizer's rules before committing any working implementation or starter code.
+A live benchmark should compare ProofLoop with a clearly described scripted baseline on identical synthetic scenarios. Metrics must be generated by live runs; no performance results are claimed in advance.
