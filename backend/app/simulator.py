@@ -43,8 +43,15 @@ class ServiceSimulator:
             "config loader: active config v_bad",
         ]
         if scenario == "false_green":
+            # The basic health endpoint is green, but user-facing checkout remains broken.
+            # Keep the config healthy so rolling it back cannot accidentally hide this scenario.
+            self.state.config_version = self.state.healthy_config_version
             self.state.health_endpoint_status = 200
-            self.state.logs.append("health endpoint reports OK; checkout probes are failing")
+            self.state.logs = [
+                "checkout-service: checkout transactions are failing despite healthy process",
+                "config loader: active config v_healthy",
+                "health endpoint reports OK; checkout probes are failing",
+            ]
         elif scenario == "stale_runbook":
             self.state.logs.append("metrics correlate failures with config v_bad")
         elif scenario == "hostile_log":
