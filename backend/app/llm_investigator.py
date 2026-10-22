@@ -158,3 +158,9 @@ def propose_action(simulator: ServiceSimulator) -> tuple[ToolRequest, str, list[
 
     action, rationale, refs = propose_next_action(simulator)
     return action, rationale, refs, "fallback"
+
+
+def configured_mode() -> str:
+    """Describe the configured planner; a provider failure may still trigger fallback per incident."""
+    provider = _configured_provider()
+    return f"llm:{provider}" if provider else "fallback"
