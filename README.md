@@ -11,10 +11,12 @@ The `sanjay/agent-policy-verifier` branch contains an early backend vertical sli
 - Deny-by-default policy gate with client-specific rules.
 - Read-only verifier requiring three checks to pass.
 - Bounded rule-based investigator fallback.
-- FastAPI endpoints for incident runs and an explicit pause/approve/deny workflow.
-- Initial automated safety and approval-flow tests.
+- FastAPI incident execution and explicit pause/approve/deny workflow.
+- SQLite-backed incident metadata and append-only event history.
+- Background incident start endpoint and resumable Server-Sent Events (SSE) stream.
+- Automated safety, approval-flow and persistence tests.
 
-This is a synthetic prototype, not production-ready IT automation. The live LLM provider, persistent event store, SSE stream, baseline benchmark and React dashboard remain planned.
+This is a synthetic prototype, not production-ready IT automation. Live LLM integration, durable restoration of pending simulator approvals, benchmark runner and React dashboard remain planned.
 
 ## Core workflow
 
@@ -25,14 +27,14 @@ This is a synthetic prototype, not production-ready IT automation. The live LLM 
 5. Independently verify recovery.
 6. Report `VERIFIED`, `UNVERIFIED`, `BLOCKED`, `ESCALATED`, or `PENDING_APPROVAL` with an event trail.
 
-## Planned technology
+## Technology
 
 - Backend: Python, FastAPI, Uvicorn, Pydantic
-- LLM: event-approved provider behind a swappable interface, with a rule-based fallback
-- Frontend: React, TypeScript, Vite
+- Persistence: SQLite event and incident store
 - Live updates: Server-Sent Events (SSE)
+- LLM: event-approved provider behind a swappable interface, with a rule-based fallback
+- Frontend: React, TypeScript, Vite (planned)
 - Testing: pytest
-- Event log: JSONL
 
 ## Quick start
 
@@ -63,9 +65,9 @@ Agree on shared schemas and tool/API contracts before changing them.
 - Retries are bounded; uncertain outcomes are escalated.
 - Never commit API keys or credentials.
 
-## Approval workflow limitation
+## Security and durability limitations
 
-The current approval flow stores pending requests in process memory. The `approver_id` field is an audit label, not authentication. This endpoint is for a local controlled demo only; do not expose it to untrusted networks.
+The approval flow is for a local controlled demo only. `approver_id` is not authentication. Incident history is persisted in SQLite, but pending approval execution context remains in process memory and is not restored after restart. Production use requires authenticated approval, authorization, durable pending-action state, concurrency controls and operational hardening.
 
 ## Evaluation
 
