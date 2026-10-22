@@ -51,7 +51,7 @@ uvicorn app.main:app --reload
 
 API docs: `http://127.0.0.1:8000/docs`
 
-The test suite deliberately defaults to the deterministic fallback and does not require API credentials. To use Groq, set `PROOFLOOP_LLM_PROVIDER=groq` and `GROQ_API_KEY` in `backend/.env`; for a local Ollama server, set `PROOFLOOP_LLM_PROVIDER=ollama` and configure `OLLAMA_BASE_URL` / `OLLAMA_MODEL`. Never commit `.env` or provider credentials.
+The test suite deliberately defaults to the deterministic fallback and does not require API credentials. Use `backend/.env.example` as a safe starting point for local configuration, then copy it to `backend/.env` if needed. To use Groq, set `PROOFLOOP_LLM_PROVIDER=groq` and add your `GROQ_API_KEY`; for a local Ollama server, set `PROOFLOOP_LLM_PROVIDER=ollama` and configure `OLLAMA_BASE_URL` / `OLLAMA_MODEL`. Never commit `.env` or provider credentials.
 
 ## Team ownership
 
