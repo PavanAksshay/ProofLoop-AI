@@ -41,17 +41,9 @@ The response includes `incident_id`, `events_url`, and `incident_url`. Open the 
 
 ## Approval workflow
 
-Start an incident using Client B, whose policy requires approval for configuration rollback:
+Start an incident using Client B, whose policy requires approval for configuration rollback. The synchronous `POST /incidents` endpoint should return `PENDING_APPROVAL` and include an `approval_requested` event. No `tool_executed` event should exist yet.
 
-```json
-{
-  "scenario": "clean_recovery",
-  "client": "client_b",
-  "mode": "proofloop"
-}
-```
-
-The synchronous endpoint should return `PENDING_APPROVAL` and include an `approval_requested` event. No `tool_executed` event should exist yet. Copy the returned `incident_id`, then submit to `POST /incidents/{incident_id}/approval`:
+Submit to `POST /incidents/{incident_id}/approval`:
 
 ```json
 {
@@ -61,13 +53,15 @@ The synchronous endpoint should return `PENDING_APPROVAL` and include an `approv
 }
 ```
 
-Approval executes the exact stored action and triggers independent verification. Use `"decision": "deny"` to reject the action without executing it.
+Approval executes the exact action stored by the application and triggers independent verification. Use `"decision": "deny"` to reject the action without executing it.
 
-## Persistence and prototype limitations
+Pending approval data—including the exact tool request, client, scenario and simulator snapshot—is now stored in SQLite. On process restart, the pending action can be reconstructed from this saved state. Approval decisions are claimed atomically in SQLite so two concurrent requests cannot both win. An interrupted claim is returned to pending at startup for the single-worker local prototype.
 
-- Incident metadata and event history are stored in SQLite at `backend/proofloop.db` by default. Set `PROOFLOOP_DB_PATH` to choose another path. The local database is git-ignored.
-- Pending approval execution context (including the simulator instance and exact pending action) is still held in process memory. A server restart preserves history but does **not** restore a pending approval for execution. Do not restart the server during a pending-approval demo.
-- The current `approver_id` is an audit label, **not authentication**. The approval endpoint is for a local, controlled demo only and must not be exposed to an untrusted network. Production use requires authenticated identity, authorization/role checks, CSRF or equivalent request protections where applicable, durable approval state, and concurrency-safe approval handling.
+## Persistence and security limitations
+
+- Incident metadata, event history and pending approval execution context are stored in SQLite at `backend/proofloop.db` by default. Set `PROOFLOOP_DB_PATH` to choose another path. The local database is git-ignored.
+- This recovery behavior is designed for the single-worker synthetic prototype. Do not run multiple application workers with startup claim recovery enabled. Real infrastructure actions need stronger idempotency, leases, durable execution receipts and reconciliation before retrying an interrupted operation.
+- The current `approver_id` is an audit label, **not authentication**. The approval endpoint is for a local, controlled demo only and must not be exposed to an untrusted network. Production use requires authenticated identity, authorization/role checks, CSRF or equivalent protections where applicable, durable audit controls, and concurrency-safe approval handling.
 - The current investigator is rule-based fallback; live LLM integration is not implemented.
 - Benchmarking and the React dashboard remain planned.
 - This is a synthetic prototype, not a production IT operations tool.
