@@ -33,6 +33,7 @@ class Outcome(str, Enum):
     BLOCKED = "BLOCKED"
     ESCALATED = "ESCALATED"
     PENDING_APPROVAL = "PENDING_APPROVAL"
+    RUNNING = "RUNNING"
 
 
 class Event(BaseModel):
