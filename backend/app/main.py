@@ -28,6 +28,8 @@ app = FastAPI(
 @app.on_event("startup")
 def startup() -> None:
     initialize_store()
+    from .store import recover_interrupted_approval_claims
+    recover_interrupted_approval_claims()
 
 
 @app.get("/health")
