@@ -229,3 +229,39 @@ def test_unclaimed_concurrent_decision_never_executes_action(monkeypatch):
         )
 
     assert executed == []
+
+def test_policy_rejection_at_approval_time_is_final_and_never_executes(monkeypatch):
+    incident_id = "approval-policy-tightened"
+    action = ToolRequest(
+        tool="rollback_config",
+        service="checkout-service",
+        arguments={"target_version": "v_bad"},
+    )
+    pending = _pending(incident_id, action)
+    payload = _payload(incident_id, action)
+    orchestrator._pending_approvals[incident_id] = pending
+    resolved = []
+    executed = []
+
+    monkeypatch.setattr(orchestrator, "claim_pending_approval", lambda _id: deepcopy(payload))
+    monkeypatch.setattr(orchestrator, "resolve_pending_approval", lambda value: resolved.append(value))
+    monkeypatch.setattr(
+        ServiceSimulator,
+        "execute",
+        lambda self, request: executed.append(request) or pytest.fail("Policy-rejected action must never execute"),
+    )
+
+    response = orchestrator.decide_approval(
+        incident_id,
+        ApprovalDecisionRequest(decision="approve", approver_id="reviewer-3"),
+    )
+
+    assert response.outcome == Outcome.BLOCKED
+    assert executed == []
+    assert resolved == [incident_id]
+    assert any(event.type == "approval_rejected_by_policy" for event in response.events)
+    assert any(
+        event.type == "outcome" and event.payload.get("outcome") == Outcome.BLOCKED.value
+        for event in response.events
+    )
+
