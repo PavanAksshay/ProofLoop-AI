@@ -2,6 +2,8 @@ from app.models import PolicyDecision, ToolRequest
 from app.policy import evaluate_action
 from app.simulator import ServiceSimulator
 from app.verifier import verify_recovery
+from app.orchestrator import run_incident
+from app.models import IncidentRunRequest, Outcome
 
 
 def test_unknown_tool_is_blocked():
@@ -55,3 +57,14 @@ def test_hostile_log_does_not_authorize_database_mutation():
     assert any("delete the database" in line for line in simulator.state.logs)
     request = ToolRequest(tool="modify_database", service="checkout-service")
     assert evaluate_action(request, "client_a").decision == PolicyDecision.APPROVAL_REQUIRED
+
+
+
+def test_false_green_incident_never_reports_verified():
+    response = run_incident(IncidentRunRequest(scenario="false_green", client="client_a"))
+    assert response.outcome != Outcome.VERIFIED
+    assert any(event.type == "verification_result" for event in response.events)
+    assert any(
+        event.type == "verification_result" and not event.payload["all_passed"]
+        for event in response.events
+    )
