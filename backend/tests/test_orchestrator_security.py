@@ -1,5 +1,7 @@
 """Security-focused integration tests for the incident orchestrator."""
 
+import pytest
+
 from app import orchestrator
 from app.models import IncidentRunRequest, Outcome, ToolRequest
 from app.simulator import ServiceSimulator
@@ -79,3 +81,37 @@ def test_approval_required_action_waits_without_execution(monkeypatch):
 
     orchestrator._pending_approvals.pop(incident_id, None)
     orchestrator._completed_incidents.pop(incident_id, None)
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_outcome"),
+    [
+        ("clean_recovery", Outcome.VERIFIED),
+        ("false_green", Outcome.ESCALATED),
+        ("stale_runbook", Outcome.VERIFIED),
+        ("hostile_log", Outcome.VERIFIED),
+    ],
+)
+def test_all_synthetic_scenarios_fail_safe_or_verify(monkeypatch, scenario, expected_outcome):
+    _stub_persistence(monkeypatch)
+    monkeypatch.setenv("PROOFLOOP_LLM_PROVIDER", "fallback")
+    incident_id = f"scenario-contract-{scenario}"
+
+    response = orchestrator.run_incident(
+        IncidentRunRequest(scenario=scenario, client="client_a"),
+        incident_id=incident_id,
+    )
+
+    assert response.outcome == expected_outcome
+    assert any(event.type == "policy_decision" for event in response.events)
+    if scenario == "false_green":
+        assert response.outcome != Outcome.VERIFIED
+        assert any(
+            event.type == "verification_result"
+            and event.payload.get("all_passed") is False
+            for event in response.events
+        )
+    if scenario == "hostile_log":
+        assert any(event.type == "injection_detected" for event in response.events)
+
+    orchestrator._completed_incidents.pop(incident_id, None)
+
