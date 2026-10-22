@@ -49,6 +49,16 @@ def initialize_store() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_events_incident_sequence ON incident_events(incident_id, sequence)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_approvals (
+                incident_id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'resolved')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            )
+        """)
 
 
 def create_incident(incident_id: str, scenario: str, client: str, outcome: Outcome = Outcome.RUNNING, summary: str = "Incident started.") -> None:
@@ -168,3 +178,78 @@ def incident_exists(incident_id: str) -> bool:
     initialize_store()
     with _connect() as conn:
         return conn.execute("SELECT 1 FROM incidents WHERE incident_id = ?", (incident_id,)).fetchone() is not None
+
+
+
+def save_pending_approval(incident_id: str, payload: dict[str, Any]) -> None:
+    """Persist the exact proposed action and simulator snapshot before waiting."""
+    initialize_store()
+    encoded = json.dumps(payload, separators=(",", ":"), default=str)
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO pending_approvals (incident_id, payload_json, status)
+               VALUES (?, ?, 'pending')
+               ON CONFLICT(incident_id) DO UPDATE SET
+                   payload_json = excluded.payload_json,
+                   status = 'pending',
+                   updated_at = CURRENT_TIMESTAMP""",
+            (incident_id, encoded),
+        )
+
+
+def get_pending_approval(incident_id: str) -> dict[str, Any] | None:
+    initialize_store()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json, status FROM pending_approvals WHERE incident_id = ?",
+            (incident_id,),
+        ).fetchone()
+    if row is None or row["status"] != "pending":
+        return None
+    payload = json.loads(row["payload_json"])
+    payload["_status"] = row["status"]
+    return payload
+
+
+def claim_pending_approval(incident_id: str) -> dict[str, Any] | None:
+    """Atomically claim a pending approval so only one concurrent decision wins."""
+    initialize_store()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT payload_json FROM pending_approvals WHERE incident_id = ? AND status = 'pending'",
+            (incident_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        changed = conn.execute(
+            """UPDATE pending_approvals SET status = 'processing', updated_at = CURRENT_TIMESTAMP
+               WHERE incident_id = ? AND status = 'pending'""",
+            (incident_id,),
+        ).rowcount
+        if changed != 1:
+            conn.rollback()
+            return None
+        conn.commit()
+    return json.loads(row["payload_json"])
+
+
+def resolve_pending_approval(incident_id: str) -> None:
+    initialize_store()
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE pending_approvals SET status = 'resolved', updated_at = CURRENT_TIMESTAMP
+               WHERE incident_id = ? AND status IN ('pending', 'processing')""",
+            (incident_id,),
+        )
+
+
+def release_pending_approval_claim(incident_id: str) -> None:
+    initialize_store()
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE pending_approvals SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+               WHERE incident_id = ? AND status = 'processing'""",
+            (incident_id,),
+        )
