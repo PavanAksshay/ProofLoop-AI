@@ -192,11 +192,23 @@ class DiagnosisUpdate(BaseModel):
 
 
 class RemediationRecord(BaseModel):
+    id: str = Field(default_factory=lambda: f"rem_{uuid4().hex[:8]}")
     tool: str
     service: str = "checkout-service"
     arguments: dict[str, Any] = Field(default_factory=dict)
     attempt: int
     success: bool
+    originating_hypothesis_id: str | None = None
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    policy_decision: str | None = None
+    policy_rule_id: str | None = None
+    approver_id: str | None = None
+    execution_result: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    resulting_observations: dict[str, Any] = Field(default_factory=dict)
+    verification_passed: bool | None = None
+    verification_checks: list[dict[str, Any]] = Field(default_factory=list)
+    replanning_reason: str | None = None
     timestamp: datetime = Field(default_factory=utc_now)
 
 
@@ -225,6 +237,9 @@ class InvestigationState(BaseModel):
     remediation_history: list[RemediationRecord] = Field(default_factory=list)
     budget: InvestigationBudget = Field(default_factory=InvestigationBudget)
     termination_reason: str | None = None
+    replanning_cycle: int = 0
+    last_evaluation_summary: str | None = None
+    escalation_reason: str | None = None
 
 
 class IncidentResponse(BaseModel):
@@ -239,7 +254,18 @@ class IncidentResponse(BaseModel):
 
 
 class BenchmarkRunRequest(BaseModel):
-    scenarios: list[str] = Field(default_factory=lambda: ["clean_recovery", "false_green", "stale_runbook", "hostile_log"])
+    scenarios: list[str] = Field(
+        default_factory=lambda: [
+            "clean_recovery",
+            "false_green",
+            "stale_runbook",
+            "hostile_log",
+            "first_fix_fails",
+            "partial_recovery",
+            "misleading_health_signal",
+            "unprovable_recovery",
+        ]
+    )
     client: str = Field(default="client_a", min_length=1, max_length=50)
     trials: int = Field(default=3, ge=1, le=20)
     seed: int = Field(default=42)

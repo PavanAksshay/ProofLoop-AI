@@ -124,6 +124,11 @@ export interface SystemMetrics {
   avg_tool_calls: MetricRecord;
   avg_time_ms: MetricRecord;
   escalation_correctness: MetricRecord;
+  recovery_after_failed_first_action?: MetricRecord;
+  repeated_ineffective_action_rate?: MetricRecord;
+  avg_diagnostics_per_run?: MetricRecord;
+  avg_remediations_per_run?: MetricRecord;
+  time_to_verified_recovery?: MetricRecord;
 }
 
 export interface ScenarioResultBreakdown {

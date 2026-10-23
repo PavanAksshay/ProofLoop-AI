@@ -33,6 +33,7 @@ from .models import (
     InvestigationState,
     RemediationRecord,
     ToolRequest,
+    VerificationReport,
     utc_now,
 )
 from .policy import ALLOWED_TOOLS
@@ -135,6 +136,12 @@ def normalize_initial_evidence(
 
     if any("config" in line.lower() or "deployment" in line.lower() for line in logs):
         symptoms.append("Recent deployment or configuration change logged")
+    if any("thread" in line.lower() or "concurrency" in line.lower() for line in logs):
+        symptoms.append("Thread starvation or severe concurrency bottleneck logged")
+    if any("cache" in line.lower() or "stale token" in line.lower() for line in logs):
+        symptoms.append("Cache subsystem anomalies or stale token errors logged")
+    if any("partition" in line.lower() or "upstream" in line.lower() or "cloud provider" in line.lower() for line in logs):
+        symptoms.append("Upstream cloud network partition or external link failure logged")
 
     return symptoms, evidence
 
@@ -178,7 +185,7 @@ def generate_initial_hypotheses(symptoms: list[str], evidence: list[EvidenceItem
         uncertainty_notes="Awaiting synthetic transaction probe execution.",
         suggested_diagnostic="validate_transactions",
         suggested_remediation=ToolRequest(
-            tool="clear_cache",
+            tool="restart_service",
             service="checkout-service",
             arguments={},
         ),
@@ -220,7 +227,47 @@ def generate_initial_hypotheses(symptoms: list[str], evidence: list[EvidenceItem
         ),
     )
 
-    hypotheses = [hyp_bad_config, hyp_false_green, hyp_dependency, hyp_transient]
+    has_cache_symptom = any("cache" in s.lower() for s in symptoms)
+    hyp_cache_corruption = Hypothesis(
+        id="hyp-cache-corruption",
+        title="Corrupted Transaction Cache",
+        description="Corrupted or stale transaction tokens in cache causing checkout aborts.",
+        category="cache",
+        confidence_score=0.55 if has_cache_symptom else 0.35,
+        required_evidence=["cache:stale_tokens_identified"],
+        applicable_diagnostics=["validate_transactions", "read_logs"],
+        last_ranking_change_reason="Initial hypothesis generated to evaluate cache corruption.",
+        uncertainty_notes="Awaiting transaction failure correlation.",
+        suggested_diagnostic="validate_transactions",
+        suggested_remediation=ToolRequest(
+            tool="clear_cache",
+            service="checkout-service",
+            arguments={},
+        ),
+    )
+
+    hypotheses = [hyp_bad_config, hyp_false_green, hyp_dependency, hyp_transient, hyp_cache_corruption]
+
+    has_thread_symptom = any("thread" in s.lower() or "concurrency" in s.lower() for s in symptoms)
+    if has_thread_symptom:
+        hyp_resource_starvation = Hypothesis(
+            id="hyp-resource-starvation",
+            title="Worker Thread Starvation / Concurrency Bottleneck",
+            description="Worker thread pool exhaustion causing request queue timeouts.",
+            category="capacity",
+            confidence_score=0.60,
+            required_evidence=["logs:thread_exhaustion_detected"],
+            applicable_diagnostics=["read_logs", "get_metrics"],
+            last_ranking_change_reason="Initial hypothesis generated from concurrency and thread symptoms.",
+            uncertainty_notes="Awaiting log verification of thread saturation.",
+            suggested_diagnostic="read_logs",
+            suggested_remediation=ToolRequest(
+                tool="scale_service",
+                service="checkout-service",
+                arguments={"replicas": 3},
+            ),
+        )
+        hypotheses.append(hyp_resource_starvation)
 
     has_injection = any("untrusted prompt injection" in s.lower() for s in symptoms)
     if has_injection:
@@ -275,7 +322,7 @@ def update_hypotheses_with_evidence(
 
             # 1. Faulty Configuration Deployment Evaluation
             if hyp.id == "hyp-bad-config":
-                if ev.source == "diagnostic:compare_config":
+                if ev.source in ("diagnostic:compare_config", "post_remediation:config"):
                     if not data.get("is_matching_healthy", True):
                         supporting_ids.append(ev_id)
                         satisfied_requirements.add("diff:active_differs_from_healthy")
@@ -286,6 +333,9 @@ def update_hypotheses_with_evidence(
                     if any("v_bad" in line or "config loader: active config v_bad" in line for line in logs_list):
                         supporting_ids.append(ev_id)
                     elif any("active config v_healthy" in line for line in logs_list):
+                        contradicting_ids.append(ev_id)
+                elif ev.source == "post_remediation:metrics":
+                    if data.get("active_config") == "v_healthy" and (data.get("error_rate", 0.0) > 0.05 or data.get("failed_probes", 0) > 0):
                         contradicting_ids.append(ev_id)
 
             # 2. False Green / Hidden Transactional Failure Evaluation
@@ -310,16 +360,20 @@ def update_hypotheses_with_evidence(
 
             # 3. Database or Dependency Failure Evaluation
             elif hyp.id == "hyp-dependency-failure":
-                if ev.source == "diagnostic:check_dependencies":
+                if ev.source in ("diagnostic:check_dependencies", "post_remediation:dependencies"):
                     if not data.get("dependencies_healthy", True) or data.get("database_status") == "exhausted":
                         supporting_ids.append(ev_id)
                         satisfied_requirements.add("dep:downstream_database_error")
                     else:
                         contradicting_ids.append(ev_id)
-                elif ev.source in ("logs:checkout-service", "diagnostic:read_logs"):
+                elif ev.source in ("logs:checkout-service", "diagnostic:read_logs", "post_remediation:logs"):
                     logs_list = data.get("logs", [])
-                    if any("connection pool" in line.lower() or "timeout" in line.lower() for line in logs_list):
+                    if any("connection pool" in line.lower() or "database pool" in line.lower() or "timeout" in line.lower() for line in logs_list):
                         supporting_ids.append(ev_id)
+                elif ev.source == "post_remediation:metrics":
+                    if not data.get("dependencies_healthy", True):
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("dep:downstream_database_error")
 
             # 4. Hostile Prompt Injection Evaluation
             elif hyp.id == "hyp-hostile-injection":
@@ -337,6 +391,39 @@ def update_hypotheses_with_evidence(
                     elif data.get("failed", 0) == 0 and data.get("total", 0) > 0:
                         supporting_ids.append(ev_id)
                         satisfied_requirements.add("metrics:transient_error_spike")
+
+            # 6. Corrupted Transaction Cache Evaluation
+            elif hyp.id == "hyp-cache-corruption":
+                if ev.source in ("logs:checkout-service", "diagnostic:read_logs", "post_remediation:logs"):
+                    logs_list = data.get("logs", [])
+                    if any("cache" in line.lower() or "stale token" in line.lower() for line in logs_list):
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("cache:stale_tokens_identified")
+                elif ev.source == "diagnostic:validate_transactions":
+                    if data.get("failed", 0) > 0:
+                        supporting_ids.append(ev_id)
+                elif ev.source == "post_remediation:metrics":
+                    if data.get("failed_probes", 0) > 0:
+                        supporting_ids.append(ev_id)
+
+            # 7. Resource Starvation / Concurrency Evaluation
+            elif hyp.id == "hyp-resource-starvation":
+                if ev.source in ("logs:checkout-service", "diagnostic:read_logs", "post_remediation:logs"):
+                    logs_list = data.get("logs", [])
+                    if any("thread" in line.lower() or "concurrency" in line.lower() for line in logs_list):
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("logs:thread_exhaustion_detected")
+                elif ev.source in ("metrics:checkout-service", "diagnostic:get_metrics") and data.get("error_rate", 0) > 0.05:
+                    supporting_ids.append(ev_id)
+                elif ev.source == "post_remediation:dependencies" and not data.get("dependencies_healthy", True):
+                    contradicting_ids.append(ev_id)
+
+            # Verification failure contradiction correlation
+            if ev.source == "verifier:independent_check" and ev.kind == EvidenceKind.CONTRADICTORY:
+                failed_act = data.get("failed_action")
+                orig_hyp_id = data.get("originating_hypothesis_id")
+                if orig_hyp_id == hyp.id or (hyp.suggested_remediation and hyp.suggested_remediation.tool == failed_act):
+                    contradicting_ids.append(ev_id)
 
         # Deduplicate evidence references to guarantee no repeated counting
         dedup_supporting = list(dict.fromkeys(supporting_ids))
@@ -441,9 +528,13 @@ def calculate_diagnostic_eiv(
     5. Net Score:
        EIV = round(max(0.0, 0.45 * DP + 0.35 * (UR * relevance) + 0.20 * relevance - 0.05), 3)
     """
-    already_run = [d for d in state.diagnostics_performed if d.tool == tool]
+    last_remediation_ts = state.remediation_history[-1].timestamp if state.remediation_history else None
+    already_run = [
+        d for d in state.diagnostics_performed
+        if d.tool == tool and (last_remediation_ts is None or d.timestamp >= last_remediation_ts)
+    ]
     if already_run:
-        # Check if previous execution yielded conclusive data
+        # Check if previous execution yielded conclusive data in the current cycle
         has_conclusive_run = any(d.success and bool(d.data) for d in already_run)
         if has_conclusive_run:
             return 0.0, f"Duplicate suppressed: diagnostic '{tool}' already executed with conclusive result.", []
@@ -607,12 +698,20 @@ def is_diagnosis_sufficient(state: InvestigationState) -> tuple[bool, str]:
                         satisfied.add("probe:transaction_failure_observed")
                     if ev.source == "metrics:checkout-service" and ev.data.get("health_endpoint_status") == 200:
                         satisfied.add("health:endpoint_reports_200")
-                elif leading.id == "hyp-dependency-failure" and ev.source == "diagnostic:check_dependencies":
+                elif leading.id == "hyp-dependency-failure" and ev.source in ("diagnostic:check_dependencies", "post_remediation:dependencies"):
                     if not ev.data.get("dependencies_healthy", True) or ev.data.get("database_status") == "exhausted":
                         satisfied.add("dep:downstream_database_error")
                 elif leading.id == "hyp-transient-spike" and ev.source == "metrics:checkout-service":
                     if ev.data.get("error_rate", 0.0) > 0.05:
                         satisfied.add("metrics:transient_error_spike")
+                elif leading.id == "hyp-cache-corruption":
+                    if ev.source in ("logs:checkout-service", "diagnostic:read_logs", "post_remediation:logs"):
+                        if any("cache" in line.lower() or "stale token" in line.lower() for line in ev.data.get("logs", [])):
+                            satisfied.add("cache:stale_tokens_identified")
+                elif leading.id == "hyp-resource-starvation":
+                    if ev.source in ("logs:checkout-service", "diagnostic:read_logs", "post_remediation:logs"):
+                        if any("thread" in line.lower() or "concurrency" in line.lower() for line in ev.data.get("logs", [])):
+                            satisfied.add("logs:thread_exhaustion_detected")
 
         missing = [req for req in leading.required_evidence if req not in satisfied]
         if missing:
@@ -636,9 +735,19 @@ def is_diagnosis_sufficient(state: InvestigationState) -> tuple[bool, str]:
                 )
 
     # 6. Freshness / Diagnostic verification check
-    diagnostic_evidence = [ev for ev in state.evidence if ev.kind == EvidenceKind.DIAGNOSTIC_RESULT]
+    diagnostic_evidence = [
+        ev for ev in state.evidence
+        if ev.kind in (EvidenceKind.DIAGNOSTIC_RESULT, EvidenceKind.CONTRADICTORY) or ev.source.startswith("post_remediation:")
+    ]
     if not diagnostic_evidence:
         return False, "Premature diagnosis prevented: no diagnostic tool has been executed to verify symptoms."
+
+    # 7. Duplicate ineffective remediation check
+    if leading.suggested_remediation and state.remediation_history:
+        tool_name = leading.suggested_remediation.tool
+        prev = next((rec for rec in reversed(state.remediation_history) if rec.tool == tool_name), None)
+        if prev and (not prev.success or prev.verification_passed is False):
+            return False, f"Suggested remediation '{tool_name}' was already attempted without achieving recovery; replanning required."
 
     return True, f"Diagnosis '{leading.title}' sufficiently supported by evidence with all competing hypotheses resolved."
 
@@ -824,24 +933,37 @@ def run_investigation_cycle(
     sufficient, sufficiency_reason = is_diagnosis_sufficient(state)
     if sufficient:
         leading_hyp = state.hypotheses[0]
-        state.current_diagnosis = DiagnosisUpdate(
-            diagnosis=f"{leading_hyp.title}: {leading_hyp.description}",
-            confidence=leading_hyp.confidence_score,
-            confidence_basis=f"Corroborated by {len(leading_hyp.supporting_evidence_ids)} independent evidence items: {sufficiency_reason}",
-            leading_hypothesis_id=leading_hyp.id,
-            unresolved_uncertainties=[],
-        )
         remediation = leading_hyp.suggested_remediation or ToolRequest(
             tool="rollback_config",
             service="checkout-service",
             arguments={"target_version": "v_healthy"},
         )
-        rationale = (
-            f"Diagnosis confirmed with {round(leading_hyp.confidence_score * 100)}% confidence: "
-            f"{leading_hyp.title}. Evidence supports remediation via {remediation.tool}."
-        )
-        state.proposed_next_step = remediation
-        return state, remediation, rationale
+        prev = next((rec for rec in reversed(state.remediation_history) if rec.tool == remediation.tool), None)
+        if prev and (not prev.success or prev.verification_passed is False):
+            leading_hyp.status = HypothesisStatus.REFUTED
+            leading_hyp.uncertainty_notes = f"Action '{remediation.tool}' previously attempted without achieving recovery; suppressed."
+            state.hypotheses = update_hypotheses_with_evidence(state.hypotheses, state.evidence)
+            sufficient, sufficiency_reason = is_diagnosis_sufficient(state)
+            if sufficient:
+                leading_hyp = state.hypotheses[0]
+                remediation = leading_hyp.suggested_remediation or ToolRequest(
+                    tool="rollback_config", service="checkout-service", arguments={"target_version": "v_healthy"}
+                )
+
+        if sufficient:
+            state.current_diagnosis = DiagnosisUpdate(
+                diagnosis=f"{leading_hyp.title}: {leading_hyp.description}",
+                confidence=leading_hyp.confidence_score,
+                confidence_basis=f"Corroborated by {len(leading_hyp.supporting_evidence_ids)} independent evidence items: {sufficiency_reason}",
+                leading_hypothesis_id=leading_hyp.id,
+                unresolved_uncertainties=[],
+            )
+            rationale = (
+                f"Diagnosis confirmed with {round(leading_hyp.confidence_score * 100)}% confidence: "
+                f"{leading_hyp.title}. Evidence supports remediation via {remediation.tool}."
+            )
+            state.proposed_next_step = remediation
+            return state, remediation, rationale
 
     # 5. Otherwise, select the next distinguishing read-only diagnostic tool via EIV
     # Check LLM consultation first if available
@@ -880,23 +1002,29 @@ def run_investigation_cycle(
         post_sufficient, post_reason = is_diagnosis_sufficient(state)
         if post_sufficient:
             new_leading = state.hypotheses[0]
-            state.current_diagnosis = DiagnosisUpdate(
-                diagnosis=f"{new_leading.title}: {new_leading.description}",
-                confidence=new_leading.confidence_score,
-                confidence_basis=f"Confirmed after running {diagnostic_proposal.tool}: {new_ev.summary}",
-                leading_hypothesis_id=new_leading.id,
-            )
             remediation = new_leading.suggested_remediation or ToolRequest(
                 tool="rollback_config",
                 service="checkout-service",
                 arguments={"target_version": "v_healthy"},
             )
-            rationale = (
-                f"Diagnostic '{diagnostic_proposal.tool}' confirmed root cause: {new_leading.title}. "
-                f"Proposing remediation {remediation.tool}."
-            )
-            state.proposed_next_step = remediation
-            return state, remediation, rationale
+            prev = next((rec for rec in reversed(state.remediation_history) if rec.tool == remediation.tool), None)
+            if prev and (not prev.success or prev.verification_passed is False):
+                new_leading.status = HypothesisStatus.REFUTED
+                new_leading.uncertainty_notes = f"Action '{remediation.tool}' previously attempted without achieving recovery; suppressed."
+                state.hypotheses = update_hypotheses_with_evidence(state.hypotheses, state.evidence)
+            else:
+                state.current_diagnosis = DiagnosisUpdate(
+                    diagnosis=f"{new_leading.title}: {new_leading.description}",
+                    confidence=new_leading.confidence_score,
+                    confidence_basis=f"Confirmed after running {diagnostic_proposal.tool}: {new_ev.summary}",
+                    leading_hypothesis_id=new_leading.id,
+                )
+                rationale = (
+                    f"Diagnostic '{diagnostic_proposal.tool}' confirmed root cause: {new_leading.title}. "
+                    f"Proposing remediation {remediation.tool}."
+                )
+                state.proposed_next_step = remediation
+                return state, remediation, rationale
 
         # If not yet confirmed, record uncertainties
         state.outstanding_uncertainties = [
@@ -919,3 +1047,107 @@ def run_investigation_cycle(
         arguments={"reason": "Diagnostics inconclusive; human intervention required"},
     )
     return state, escalate_tool, "Evidence does not sufficiently justify automated remediation; escalating."
+
+
+def evaluate_post_remediation(
+    state: InvestigationState,
+    action: ToolRequest,
+    result: Any,
+    simulator: ServiceSimulator,
+    report: VerificationReport,
+) -> tuple[InvestigationState, list[EvidenceItem], list[str]]:
+    """Perform deterministic post-remediation evaluation after action execution.
+
+    1. Gathers fresh direct observations from the simulator.
+    2. Identifies failed recovery invariants from the independent verification report.
+    3. Analyzes which expected effects occurred vs which did not.
+    4. Correlates post-action evidence against existing hypotheses.
+    5. Updates diagnosis and records replanning cycle reasons.
+    """
+    failed_invariants = [c.check_name for c in report.checks if not c.passed]
+    obs = simulator.verifier_observation()
+    probe = simulator.checkout_probe(count=5)
+
+    ev_verifier = EvidenceItem(
+        id=f"ev_verif_{uuid4().hex[:6]}",
+        source="verifier:independent_check",
+        kind=EvidenceKind.CONTRADICTORY if not report.all_passed else EvidenceKind.DIRECT_OBSERVATION,
+        summary=f"Independent verification {'passed' if report.all_passed else 'failed'} after {action.tool}: failed checks={failed_invariants}",
+        data={
+            "checks": [c.model_dump() for c in report.checks],
+            "failed_action": action.tool,
+            "action_arguments": action.arguments,
+            "all_passed": report.all_passed,
+            "originating_hypothesis_id": getattr(state.current_diagnosis, "leading_hypothesis_id", None),
+        },
+    )
+
+    ev_post_metrics = EvidenceItem(
+        id=f"ev_post_met_{uuid4().hex[:6]}",
+        source="post_remediation:metrics",
+        kind=EvidenceKind.DIRECT_OBSERVATION,
+        summary=f"Post-{action.tool} observations: error_rate={obs['error_rate']}, failed_probes={probe['failed']}/{probe['requested']}, config={obs['active_config']}",
+        data={
+            "error_rate": obs["error_rate"],
+            "failed_probes": probe["failed"],
+            "active_config": obs["active_config"],
+            "dependencies_healthy": obs["dependencies_healthy"],
+            "health_endpoint_status": simulator.state.health_endpoint_status,
+            "process_running": obs["process_running"],
+            "failed_action": action.tool,
+        },
+    )
+
+    new_evidence: list[EvidenceItem] = [ev_verifier, ev_post_metrics]
+
+    if not obs["dependencies_healthy"]:
+        ev_dep = EvidenceItem(
+            id=f"ev_post_dep_{uuid4().hex[:6]}",
+            source="post_remediation:dependencies",
+            kind=EvidenceKind.DIAGNOSTIC_RESULT,
+            summary=f"Post-{action.tool} dependency check: downstream database connection pool degraded/exhausted",
+            data={
+                "dependencies_healthy": False,
+                "database_status": "exhausted",
+                "failed_action": action.tool,
+            },
+        )
+        new_evidence.append(ev_dep)
+
+    if action.tool == "rollback_config":
+        ev_cfg = EvidenceItem(
+            id=f"ev_post_cfg_{uuid4().hex[:6]}",
+            source="post_remediation:config",
+            kind=EvidenceKind.DIAGNOSTIC_RESULT,
+            summary=f"Post-rollback configuration check: active {obs['active_config']} matches healthy {obs['expected_config']}",
+            data={
+                "active_version": obs["active_config"],
+                "healthy_version": obs["expected_config"],
+                "is_matching_healthy": obs["active_config"] == obs["expected_config"],
+                "diff": "clean" if obs["active_config"] == obs["expected_config"] else f"- {obs['active_config']}\n+ {obs['expected_config']}",
+            },
+        )
+        new_evidence.append(ev_cfg)
+
+    # Check logs for post-action signals
+    if simulator.state.logs:
+        ev_logs = EvidenceItem(
+            id=f"ev_post_log_{uuid4().hex[:6]}",
+            source="post_remediation:logs",
+            kind=EvidenceKind.DIRECT_OBSERVATION,
+            summary=f"Post-{action.tool} logs: latest entries captured",
+            data={"logs": list(simulator.state.logs[-5:])},
+        )
+        new_evidence.append(ev_logs)
+
+    state.evidence.extend(new_evidence)
+    state.hypotheses = update_hypotheses_with_evidence(state.hypotheses, state.evidence)
+    state.replanning_cycle += 1
+
+    status_str = "passed" if report.all_passed else "failed"
+    state.last_evaluation_summary = (
+        f"Post-remediation evaluation: tool '{action.tool}' (success={result.success}), "
+        f"verification {status_str}. Failed invariants: {', '.join(failed_invariants) if failed_invariants else 'none'}."
+    )
+
+    return state, new_evidence, failed_invariants
