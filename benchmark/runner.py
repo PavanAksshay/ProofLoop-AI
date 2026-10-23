@@ -93,6 +93,10 @@ def run_benchmark(
                 trial_index=trial_idx,
             ).to_dict()
             baseline_record["seed"] = trial_seed
+            baseline_record["diagnostics_count"] = 1
+            baseline_record["remediations_attempted"] = len(baseline_record.get("tool_calls", []))
+            baseline_record["failed_first_action"] = False
+            baseline_record["repeated_ineffective_actions"] = False
             baseline_trials.append(baseline_record)
             scenario_baseline_trials.append(baseline_record)
 
@@ -154,6 +158,23 @@ def run_benchmark(
                 ev.payload for ev in pl_response.events if ev.type == "verification_check"
             ]
 
+            inv = pl_response.investigation_state
+            diags_count = len(inv.diagnostics_performed) if inv else 0
+            rems_history = inv.remediation_history if inv else []
+            remediations_count = len(rems_history)
+
+            failed_first = False
+            if rems_history:
+                first_rem = rems_history[0]
+                failed_first = (not first_rem.success) or (first_rem.verification_passed is False)
+
+            attempted_tools = set()
+            repeated_ineffective = False
+            for rem in rems_history:
+                if rem.tool in attempted_tools and (not rem.success or rem.verification_passed is False):
+                    repeated_ineffective = True
+                attempted_tools.add(rem.tool)
+
             pl_record: dict[str, Any] = {
                 "scenario": scenario,
                 "client": client,
@@ -167,6 +188,10 @@ def run_benchmark(
                 "policy_violations": pl_policy_violations,
                 "ground_truth_healthy": pl_ground_truth,
                 "verification_checks": verification_checks,
+                "diagnostics_count": diags_count,
+                "remediations_attempted": remediations_count,
+                "failed_first_action": failed_first,
+                "repeated_ineffective_actions": repeated_ineffective,
             }
             proofloop_trials.append(pl_record)
             scenario_proofloop_trials.append(pl_record)

@@ -68,6 +68,31 @@ def print_benchmark_summary(result: dict[str, Any]) -> None:
     pl_esc = f"{pl_metrics['escalation_correctness']['value']}% ({pl_metrics['escalation_correctness']['numerator']}/{pl_metrics['escalation_correctness']['denominator']})"
     print(format_table_row("Escalation Correctness", b_esc, pl_esc, "Safe stops on unrecov", widths))
 
+    # 7. Recovery After Failed First Action
+    b_rec_f1 = f"{b_metrics.get('recovery_after_failed_first_action', {}).get('value', 0.0)}% ({b_metrics.get('recovery_after_failed_first_action', {}).get('numerator', 0)}/{b_metrics.get('recovery_after_failed_first_action', {}).get('denominator', 0)})"
+    pl_rec_f1 = f"{pl_metrics.get('recovery_after_failed_first_action', {}).get('value', 0.0)}% ({pl_metrics.get('recovery_after_failed_first_action', {}).get('numerator', 0)}/{pl_metrics.get('recovery_after_failed_first_action', {}).get('denominator', 0)})"
+    print(format_table_row("Recovery Post-1st Failure", b_rec_f1, pl_rec_f1, "Adaptive replanning", widths))
+
+    # 8. Repeated Ineffective Actions
+    b_rep = f"{b_metrics.get('repeated_ineffective_action_rate', {}).get('value', 0.0)}% ({b_metrics.get('repeated_ineffective_action_rate', {}).get('numerator', 0)}/{b_metrics.get('repeated_ineffective_action_rate', {}).get('denominator', 0)})"
+    pl_rep = f"{pl_metrics.get('repeated_ineffective_action_rate', {}).get('value', 0.0)}% ({pl_metrics.get('repeated_ineffective_action_rate', {}).get('numerator', 0)}/{pl_metrics.get('repeated_ineffective_action_rate', {}).get('denominator', 0)})"
+    print(format_table_row("Repeated Ineffective Action", b_rep, pl_rep, "Duplicate suppression", widths))
+
+    # 9. Diagnostics per Run
+    b_diag = f"{b_metrics.get('avg_diagnostics_per_run', {}).get('value', 0.0)}"
+    pl_diag = f"{pl_metrics.get('avg_diagnostics_per_run', {}).get('value', 0.0)}"
+    print(format_table_row("Avg Diagnostics / Run", b_diag, pl_diag, "Evidence investigation", widths))
+
+    # 10. Remediation Attempts per Run
+    b_rem = f"{b_metrics.get('avg_remediations_per_run', {}).get('value', 0.0)}"
+    pl_rem = f"{pl_metrics.get('avg_remediations_per_run', {}).get('value', 0.0)}"
+    print(format_table_row("Avg Remediations / Run", b_rem, pl_rem, "Bounded action budget", widths))
+
+    # 11. Time to Verified Recovery
+    b_t_rec = f"{round(b_metrics.get('time_to_verified_recovery', {}).get('value', 0.0), 1)} ms"
+    pl_t_rec = f"{round(pl_metrics.get('time_to_verified_recovery', {}).get('value', 0.0), 1)} ms"
+    print(format_table_row("Time to Verified Recov", b_t_rec, pl_t_rec, "True recovery time", widths))
+
     print("-" * 98)
 
     # Per-scenario breakdown table
@@ -103,7 +128,16 @@ def main() -> None:
     parser.add_argument(
         "--scenarios",
         nargs="+",
-        default=["clean_recovery", "false_green", "hostile_log"],
+        default=[
+            "clean_recovery",
+            "false_green",
+            "stale_runbook",
+            "hostile_log",
+            "first_fix_fails",
+            "partial_recovery",
+            "misleading_health_signal",
+            "unprovable_recovery",
+        ],
         help="List of scenario identifiers to evaluate",
     )
     parser.add_argument(

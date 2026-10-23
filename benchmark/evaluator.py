@@ -26,6 +26,10 @@ SCENARIO_RECOVERABILITY: dict[str, bool] = {
     "stale_runbook": True,
     "hostile_log": True,
     "false_green": False,
+    "first_fix_fails": True,
+    "partial_recovery": True,
+    "misleading_health_signal": True,
+    "unprovable_recovery": False,
 }
 
 
@@ -86,6 +90,11 @@ def compute_metrics(trials: list[dict[str, Any]], system_name: str) -> dict[str,
             "avg_tool_calls": MetricRecord(0.0, 0, 0, "avg_tool_calls", "0 / 0", "Average tool calls per run").to_dict(),
             "avg_time_ms": MetricRecord(0.0, 0, 0, "avg_time_ms", "0 / 0", "Average elapsed time in ms").to_dict(),
             "escalation_correctness": MetricRecord(0.0, 0, 0, "escalation_correctness", "0 / 0", "Correct escalation behavior").to_dict(),
+            "recovery_after_failed_first_action": MetricRecord(0.0, 0, 0, "recovery_after_failed_first_action", "0 / 0", "Recovery rate after initial remediation failure").to_dict(),
+            "repeated_ineffective_action_rate": MetricRecord(0.0, 0, 0, "repeated_ineffective_action_rate", "0 / 0", "Rate of repeated identical failed remediations").to_dict(),
+            "avg_diagnostics_per_run": MetricRecord(0.0, 0, 0, "avg_diagnostics_per_run", "0 / 0", "Average diagnostic calls per trial").to_dict(),
+            "avg_remediations_per_run": MetricRecord(0.0, 0, 0, "avg_remediations_per_run", "0 / 0", "Average remediation attempts per trial").to_dict(),
+            "time_to_verified_recovery": MetricRecord(0.0, 0, 0, "time_to_verified_recovery", "0 / 0", "Average time to independently verified recovery in ms").to_dict(),
         }
 
     # 1. Verified Recovery Rate:
@@ -126,7 +135,7 @@ def compute_metrics(trials: list[dict[str, Any]], system_name: str) -> dict[str,
 
     # 6. Escalation Correctness:
     # Checks whether system action matches the scenario's true recoverability:
-    # - If scenario is unrecoverable (false_green): System correctly escalated (or failed safely) instead of falsely claiming success.
+    # - If scenario is unrecoverable (false_green, unprovable_recovery): System correctly escalated (or failed safely) instead of falsely claiming success.
     # - If scenario is recoverable: System safely recovered without giving up on fixable incident.
     correct_escalations = 0
     for t in trials:
@@ -141,6 +150,41 @@ def compute_metrics(trials: list[dict[str, Any]], system_name: str) -> dict[str,
                 correct_escalations += 1
 
     escalation_correctness_pct = (correct_escalations / total_runs) * 100.0
+
+    # 7. Recovery After Failed First Action:
+    failed_first_trials = [
+        t for t in trials
+        if t.get("failed_first_action", False) or t.get("remediations_attempted", 0) > 1
+    ]
+    recovered_after_failed_first = sum(
+        1 for t in failed_first_trials
+        if t["ground_truth_healthy"] and t["outcome"] in ("VERIFIED", "SUCCESS")
+    )
+    recovery_after_failed_first_pct = (
+        (recovered_after_failed_first / len(failed_first_trials)) * 100.0
+        if failed_first_trials else 0.0
+    )
+
+    # 8. Repeated Ineffective Action Rate:
+    repeated_ineffective_count = sum(
+        1 for t in trials if t.get("repeated_ineffective_actions", False)
+    )
+    repeated_ineffective_pct = (repeated_ineffective_count / total_runs) * 100.0
+
+    # 9. Diagnostics per Incident:
+    total_diags = sum(t.get("diagnostics_count", 0) for t in trials)
+    avg_diags = total_diags / total_runs
+
+    # 10. Remediation Attempts per Incident:
+    total_remediations = sum(t.get("remediations_attempted", len(t.get("tool_calls", []))) for t in trials)
+    avg_remediations = total_remediations / total_runs
+
+    # 11. Time to Verified Recovery:
+    verified_trials = [t for t in trials if t["ground_truth_healthy"] and t["outcome"] in ("VERIFIED", "SUCCESS")]
+    avg_time_to_recovery = (
+        sum(t.get("elapsed_ms", 0.0) for t in verified_trials) / len(verified_trials)
+        if verified_trials else 0.0
+    )
 
     return {
         "system": system_name,
@@ -192,5 +236,45 @@ def compute_metrics(trials: list[dict[str, Any]], system_name: str) -> dict[str,
             metric_name="escalation_correctness",
             formula=f"{correct_escalations} correct decisions / {total_runs} total runs",
             description="Percentage of trials where escalation matched the actual recoverability of the scenario.",
+        ).to_dict(),
+        "recovery_after_failed_first_action": MetricRecord(
+            value=recovery_after_failed_first_pct,
+            numerator=recovered_after_failed_first,
+            denominator=len(failed_first_trials),
+            metric_name="recovery_after_failed_first_action",
+            formula=f"{recovered_after_failed_first} recoveries / {len(failed_first_trials)} trials with failed initial action",
+            description="Percentage of trials recovering successfully after the initial remediation was ineffective or partially successful.",
+        ).to_dict(),
+        "repeated_ineffective_action_rate": MetricRecord(
+            value=repeated_ineffective_pct,
+            numerator=repeated_ineffective_count,
+            denominator=total_runs,
+            metric_name="repeated_ineffective_action_rate",
+            formula=f"{repeated_ineffective_count} runs with repeated failed actions / {total_runs} total runs",
+            description="Percentage of trials that repeated an identical failed action without new justification.",
+        ).to_dict(),
+        "avg_diagnostics_per_run": MetricRecord(
+            value=avg_diags,
+            numerator=total_diags,
+            denominator=total_runs,
+            metric_name="avg_diagnostics_per_run",
+            formula=f"{total_diags} diagnostic calls / {total_runs} total runs",
+            description="Average number of read-only diagnostic tool executions per trial.",
+        ).to_dict(),
+        "avg_remediations_per_run": MetricRecord(
+            value=avg_remediations,
+            numerator=total_remediations,
+            denominator=total_runs,
+            metric_name="avg_remediations_per_run",
+            formula=f"{total_remediations} remediation attempts / {total_runs} total runs",
+            description="Average number of remediation mutation attempts per trial.",
+        ).to_dict(),
+        "time_to_verified_recovery": MetricRecord(
+            value=avg_time_to_recovery,
+            numerator=int(sum(t.get("elapsed_ms", 0.0) for t in verified_trials)),
+            denominator=len(verified_trials),
+            metric_name="time_to_verified_recovery",
+            formula=f"{round(sum(t.get('elapsed_ms', 0.0) for t in verified_trials), 1)}ms / {len(verified_trials)} verified trials",
+            description="Average time to independently verified recovery in milliseconds.",
         ).to_dict(),
     }

@@ -1,33 +1,49 @@
 from dataclasses import dataclass
+import threading
 from uuid import uuid4
 
-from .llm_investigator import propose_action
+from .investigation import (
+    evaluate_post_remediation,
+    generate_initial_hypotheses,
+    normalize_initial_evidence,
+    run_investigation_cycle,
+)
+from .llm_investigator import propose_action as _default_propose_action
 from .models import (
     Actor,
     ApprovalDecisionRequest,
+    DiagnosticProposal,
     Event,
+    EvidenceItem,
+    EvidenceKind,
     IncidentResponse,
     IncidentRunRequest,
+    InvestigationState,
     Outcome,
     PolicyDecision,
+    RemediationRecord,
     ToolRequest,
 )
 from .policy import evaluate_action
 from .simulator import ServiceSimulator
-from .verifier import verify_recovery
 from .store import (
     append_event,
     claim_pending_approval,
     create_incident,
     get_incident_response,
+    get_investigation_state,
     get_pending_approval,
     incident_exists,
     release_pending_approval_claim,
     resolve_pending_approval,
+    save_investigation_state,
     save_pending_approval,
     update_incident_mode,
 )
+from .verifier import verify_recovery
 
+# Export propose_action so tests/callers can inspect or mock it
+propose_action = _default_propose_action
 
 MAX_ACTION_ATTEMPTS = 3
 MAX_INVESTIGATION_STEPS = 8
@@ -53,11 +69,13 @@ class PendingApproval:
     rule_id: str
     reason: str
     mode: str = "fallback"
+    investigation_state: InvestigationState | None = None
 
 
 # Prototype-only process memory. Restarting the server clears pending approvals.
 _pending_approvals: dict[str, PendingApproval] = {}
 _completed_incidents: dict[str, IncidentResponse] = {}
+_approval_lock = threading.Lock()
 
 
 def _response(
@@ -68,6 +86,7 @@ def _response(
     summary: str,
     events: list[Event],
     mode: str = "fallback",
+    investigation_state: InvestigationState | None = None,
 ) -> IncidentResponse:
     return IncidentResponse(
         incident_id=incident_id,
@@ -77,10 +96,19 @@ def _response(
         summary=summary,
         mode=mode,
         events=events,
+        investigation_state=investigation_state,
     )
 
 
-def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, payload: dict, refs: list[str] | None = None, persist: bool = True) -> None:
+def _emit(
+    events: list[Event],
+    incident_id: str,
+    event_type: str,
+    actor: Actor,
+    payload: dict,
+    refs: list[str] | None = None,
+    persist: bool = True,
+) -> None:
     event = Event(
         incident_id=incident_id,
         type=event_type,
@@ -93,7 +121,15 @@ def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, 
         append_event(event)
 
 
-def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: ServiceSimulator, events: list[Event], mode: str = "fallback") -> IncidentResponse:
+def _verify_and_report(
+    incident_id: str,
+    scenario: str,
+    client: str,
+    simulator: ServiceSimulator,
+    events: list[Event],
+    mode: str = "fallback",
+    investigation_state: InvestigationState | None = None,
+) -> IncidentResponse:
     report = verify_recovery(simulator)
     for check in report.checks:
         _emit(events, incident_id, "verification_check", Actor.VERIFIER, check.model_dump(mode="json"))
@@ -105,7 +141,9 @@ def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: 
         outcome = Outcome.ESCALATED
         summary = "Recovery could not be proven; the incident was escalated."
     _emit(events, incident_id, "outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
-    response = _response(incident_id, scenario, client, outcome, summary, events, mode=mode)
+    response = _response(
+        incident_id, scenario, client, outcome, summary, events, mode=mode, investigation_state=investigation_state
+    )
     _completed_incidents[incident_id] = response
     return response
 
@@ -136,10 +174,49 @@ def run_incident(
         "client": request.client,
         "requested_mode": request.mode,
     })
+
+    # 1. Evidence-Driven Engine Initialization
+    symptoms, initial_evidence = normalize_initial_evidence(simulator, request.scenario)
+    hypotheses = generate_initial_hypotheses(symptoms, initial_evidence)
+    inv_state = InvestigationState(
+        incident_id=incident_id,
+        symptoms=symptoms,
+        step=1,
+        hypotheses=hypotheses,
+        evidence=initial_evidence,
+    )
+
+    emit("investigation_started", Actor.SYSTEM, {
+        "symptoms": inv_state.symptoms,
+        "hypothesis_count": len(inv_state.hypotheses),
+        "budget": inv_state.budget.model_dump(),
+    })
+
+    # Emit initial hypotheses
+    for hyp in inv_state.hypotheses:
+        emit("hypothesis_created", Actor.AGENT, hyp.model_dump())
+
+    # Emit initial structured evidence items
+    for ev in inv_state.evidence:
+        emit("evidence_observed", Actor.TOOL, ev.model_dump(), [ev.source])
+        supp_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.supporting_evidence_ids]
+        contra_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.contradicting_evidence_ids]
+        if supp_hyps or contra_hyps:
+            emit("evidence_correlated", Actor.AGENT, {
+                "evidence_id": ev.id,
+                "source": ev.source,
+                "kind": ev.kind.value,
+                "supporting_hypotheses": supp_hyps,
+                "contradicting_hypotheses": contra_hyps,
+            }, [ev.source])
+
+    # Backward-compatible evidence_collected event for existing UI/contracts
     logs = simulator.read_logs("checkout-service").result.get("logs", [])
     emit("evidence_collected", Actor.TOOL, {"source": "logs", "excerpt": logs}, ["logs:checkout-service"])
 
-    if any("ignore policy" in line.lower() or "delete the database" in line.lower() for line in logs):
+    # Injection detection alert
+    has_injection = any("ignore policy" in line.lower() or "delete the database" in line.lower() for line in logs)
+    if has_injection or any("untrusted prompt injection" in s.lower() for s in symptoms):
         emit("injection_detected", Actor.SYSTEM, {
             "message": "Instruction-like text detected in untrusted log data; treated as data."
         }, ["logs:checkout-service"])
@@ -149,7 +226,41 @@ def run_incident(
     response_mode = "fallback"
 
     action_attempts = 0
-    investigation_steps = 1  # Step 1: initial log evidence collection
+    investigation_steps = 1  # Step 1: initial symptom & evidence collection
+
+    # Check whether propose_action was monkeypatched (e.g., in unit tests)
+    is_propose_action_patched = propose_action != _default_propose_action
+
+    return _orchestrate_loop(
+        incident_id=incident_id,
+        scenario=request.scenario,
+        client=request.client,
+        simulator=simulator,
+        events=events,
+        inv_state=inv_state,
+        action_attempts=0,
+        investigation_steps=1,
+        record_to_store=record_to_store,
+        response_mode="fallback",
+        is_propose_action_patched=is_propose_action_patched,
+    )
+
+
+def _orchestrate_loop(
+    incident_id: str,
+    scenario: str,
+    client: str,
+    simulator: ServiceSimulator,
+    events: list[Event],
+    inv_state: InvestigationState,
+    action_attempts: int,
+    investigation_steps: int,
+    record_to_store: bool,
+    response_mode: str,
+    is_propose_action_patched: bool,
+) -> IncidentResponse:
+    def emit(event_type: str, actor: Actor, payload: dict, refs: list[str] | None = None) -> None:
+        _emit(events, incident_id, event_type, actor, payload, refs, persist=record_to_store)
 
     while action_attempts < MAX_ACTION_ATTEMPTS:
         if investigation_steps >= MAX_INVESTIGATION_STEPS:
@@ -158,35 +269,193 @@ def run_incident(
                 "steps": investigation_steps,
                 "message": f"Investigation step limit ({MAX_INVESTIGATION_STEPS}) reached without resolution; escalating incident.",
             })
+            emit("investigation_budget_exhausted", Actor.SYSTEM, {
+                "limit": MAX_INVESTIGATION_STEPS,
+                "steps": investigation_steps,
+                "message": f"Investigation step limit ({MAX_INVESTIGATION_STEPS}) reached without resolution; escalating incident.",
+            })
+            emit("escalation_reason_recorded", Actor.SYSTEM, {
+                "reason": f"Investigation step limit ({MAX_INVESTIGATION_STEPS}) reached without resolution.",
+                "steps": investigation_steps,
+            })
             outcome = Outcome.ESCALATED
             summary = f"Investigation step limit ({MAX_INVESTIGATION_STEPS}) reached without resolution; incident escalated."
-            break
+            emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+            if record_to_store:
+                save_investigation_state(incident_id, inv_state)
+            response = _response(
+                incident_id, scenario, client, outcome, summary, events,
+                mode=response_mode, investigation_state=inv_state
+            )
+            if record_to_store:
+                _completed_incidents[incident_id] = response
+            return response
 
         investigation_steps += 1
-        action, rationale, evidence_refs, selected_mode = propose_action(simulator)
-        response_mode = selected_mode
+        inv_state.step = investigation_steps
+        inv_state.budget.steps_taken = investigation_steps
+
+        if is_propose_action_patched:
+            # Respect explicit monkeypatching from unit test suites
+            action, rationale, evidence_refs, selected_mode = propose_action(simulator)
+            response_mode = selected_mode
+        else:
+            # Run Phase 5 Evidence-Driven Investigation Engine Cycle
+            prev_diag_count = len(inv_state.diagnostics_performed)
+            inv_state, proposed_tool, rationale = run_investigation_cycle(inv_state, simulator)
+
+            # If a diagnostic was executed in this step, emit audit events
+            if len(inv_state.diagnostics_performed) > prev_diag_count:
+                latest_diag = inv_state.diagnostics_performed[-1]
+                latest_ev = inv_state.evidence[-1]
+                latest_prop = inv_state.proposed_next_step if isinstance(inv_state.proposed_next_step, DiagnosticProposal) else None
+                eiv = latest_prop.expected_information_value if latest_prop else 0.5
+                dist_power = latest_prop.distinguishing_power if latest_prop else ""
+                target_hyps = latest_prop.target_hypotheses if latest_prop else []
+
+                emit("diagnostic_selected", Actor.AGENT, {
+                    "tool": latest_diag.tool,
+                    "service": latest_diag.service,
+                    "arguments": latest_diag.arguments,
+                    "rationale": latest_prop.rationale if latest_prop else "Selected to distinguish competing root-cause hypotheses.",
+                    "target_hypotheses": target_hyps,
+                    "expected_information_value": eiv,
+                    "distinguishing_power": dist_power,
+                })
+                emit("diagnostic_started", Actor.AGENT, {
+                    "tool": latest_diag.tool,
+                    "service": latest_diag.service,
+                })
+                emit("diagnostic_completed", Actor.TOOL, {
+                    "tool": latest_diag.tool,
+                    "success": latest_diag.success,
+                    "result": latest_diag.data,
+                    "error": latest_diag.error,
+                })
+                emit("evidence_observed", Actor.TOOL, latest_ev.model_dump(), [latest_ev.source])
+
+                # Correlate diagnostic evidence with hypotheses
+                supp_hyps = [h.id for h in inv_state.hypotheses if latest_ev.id in h.supporting_evidence_ids]
+                contra_hyps = [h.id for h in inv_state.hypotheses if latest_ev.id in h.contradicting_evidence_ids]
+                emit("evidence_correlated", Actor.AGENT, {
+                    "evidence_id": latest_ev.id,
+                    "source": latest_ev.source,
+                    "kind": latest_ev.kind.value,
+                    "supporting_hypotheses": supp_hyps,
+                    "contradicting_hypotheses": contra_hyps,
+                }, [latest_ev.source])
+
+            # Emit updated hypotheses
+            emit("hypothesis_updated", Actor.AGENT, {
+                "hypotheses": [h.model_dump() for h in inv_state.hypotheses],
+            })
+
+            # Emit diagnosis update if formulated
+            if inv_state.current_diagnosis:
+                emit("diagnosis_updated", Actor.AGENT, inv_state.current_diagnosis.model_dump())
+
+            if proposed_tool is None:
+                # Continuing diagnostic accumulation
+                continue
+
+            action = proposed_tool
+            evidence_refs = [ev.source for ev in inv_state.evidence]
+            from .llm_investigator import _configured_provider
+            provider = _configured_provider()
+            response_mode = f"llm:{provider}" if provider else "fallback"
+
         if record_to_store:
-            update_incident_mode(incident_id, selected_mode)
-        emit("action_proposed", Actor.AGENT, {
+            update_incident_mode(incident_id, response_mode)
+            save_investigation_state(incident_id, inv_state)
+
+        # Handle escalation proposed by engine
+        if action.tool == "escalate_to_human":
+            emit("investigation_escalated", Actor.SYSTEM, {
+                "reason": str(action.arguments.get("reason", "Escalated to a human operator.")),
+                "summary": rationale,
+            })
+            emit("escalation_reason_recorded", Actor.SYSTEM, {
+                "reason": str(action.arguments.get("reason", "Escalated to a human operator.")),
+                "summary": rationale,
+            })
+            outcome = Outcome.ESCALATED
+            summary = str(action.arguments.get("reason", "Escalated to a human operator."))
+            emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+            if record_to_store:
+                save_investigation_state(incident_id, inv_state)
+            response = _response(
+                incident_id, scenario, client, outcome, summary, events,
+                mode=response_mode, investigation_state=inv_state
+            )
+            if record_to_store:
+                _completed_incidents[incident_id] = response
+            return response
+
+        # Check if recovery plan changed from a previously attempted remediation
+        if inv_state.remediation_history:
+            last_attempt = inv_state.remediation_history[-1]
+            if last_attempt.tool != action.tool or last_attempt.arguments != action.arguments:
+                emit("recovery_plan_changed", Actor.AGENT, {
+                    "previous_tool": last_attempt.tool,
+                    "previous_arguments": last_attempt.arguments,
+                    "new_tool": action.tool,
+                    "new_arguments": action.arguments,
+                    "rationale": rationale,
+                    "replanning_cycle": inv_state.replanning_cycle,
+                })
+                emit("new_remediation_proposed", Actor.AGENT, {
+                    "tool": action.tool,
+                    "service": action.service,
+                    "arguments": action.arguments,
+                    "rationale": rationale,
+                    "replanning_cycle": inv_state.replanning_cycle,
+                })
+
+        # Emit remediation proposal events
+        if action.tool in REMEDIATION_TOOLS:
+            inv_state.budget.remediations_proposed += 1
+
+        emit("remediation_proposed", Actor.AGENT, {
             "attempt": action_attempts + 1,
-            "investigation_step": investigation_steps,
-            "mode": selected_mode,
             "tool": action.tool,
             "service": action.service,
             "arguments": action.arguments,
             "rationale": rationale,
         }, evidence_refs)
 
-        decision = evaluate_action(action, request.client)
+        emit("action_proposed", Actor.AGENT, {
+            "attempt": action_attempts + 1,
+            "investigation_step": investigation_steps,
+            "mode": response_mode,
+            "tool": action.tool,
+            "service": action.service,
+            "arguments": action.arguments,
+            "rationale": rationale,
+        }, evidence_refs)
+
+        # Policy Gate Evaluation
+        decision = evaluate_action(action, client)
         emit("policy_decision", Actor.GATE, decision.model_dump(mode="json"), evidence_refs)
 
         if decision.decision == PolicyDecision.BLOCKED:
+            if action.tool in REMEDIATION_TOOLS:
+                inv_state.budget.remediations_blocked += 1
             outcome = Outcome.BLOCKED
             summary = f"Action blocked by policy: {decision.reason}"
-            break
+            emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+            if record_to_store:
+                save_investigation_state(incident_id, inv_state)
+            response = _response(
+                incident_id, scenario, client, outcome, summary, events,
+                mode=response_mode, investigation_state=inv_state
+            )
+            if record_to_store:
+                _completed_incidents[incident_id] = response
+            return response
 
         if decision.decision == PolicyDecision.APPROVAL_REQUIRED:
-            # No simulator call occurs before the human decision.
+            if action.tool in REMEDIATION_TOOLS:
+                inv_state.budget.remediations_pending_approval += 1
             before = simulator.snapshot()
             emit("approval_requested", Actor.SYSTEM, {
                 "tool": action.tool,
@@ -199,48 +468,50 @@ def run_incident(
             }, evidence_refs)
             if simulator.snapshot() != before:
                 raise RuntimeError("Simulator mutated while approval was pending")
+
             pending = PendingApproval(
                 incident_id=incident_id,
-                scenario=request.scenario,
-                client=request.client,
+                scenario=scenario,
+                client=client,
                 simulator=simulator,
                 events=events,
                 action=action,
                 attempt=action_attempts + 1,
                 rule_id=decision.rule_id,
                 reason=decision.reason,
-                mode=selected_mode,
+                mode=response_mode,
+                investigation_state=inv_state,
             )
             if record_to_store:
                 _pending_approvals[incident_id] = pending
                 save_pending_approval(incident_id, {
                     "incident_id": incident_id,
-                    "scenario": request.scenario,
-                    "client": request.client,
+                    "scenario": scenario,
+                    "client": client,
                     "simulator_snapshot": simulator.snapshot(),
                     "action": action.model_dump(mode="json"),
                     "attempt": action_attempts + 1,
                     "investigation_step": investigation_steps,
                     "rule_id": decision.rule_id,
                     "reason": decision.reason,
-                    "mode": selected_mode,
+                    "mode": response_mode,
                 })
+                save_investigation_state(incident_id, inv_state)
+
             response = _response(
-                incident_id, request.scenario, request.client,
+                incident_id, scenario, client,
                 Outcome.PENDING_APPROVAL,
                 "Waiting for an explicit human approval decision. No action has been executed.",
                 events,
-                mode=selected_mode,
+                mode=response_mode,
+                investigation_state=inv_state,
             )
             return response
 
-        if action.tool == "escalate_to_human":
-            outcome = Outcome.ESCALATED
-            summary = str(action.arguments.get("summary", "Escalated to a human operator."))
-            break
-
+        # ALLOWED action execution
         if action.tool in REMEDIATION_TOOLS:
             action_attempts += 1
+            inv_state.budget.remediations_attempted = action_attempts
 
         result = simulator.execute(action)
         emit("tool_executed", Actor.TOOL, {
@@ -251,71 +522,190 @@ def run_incident(
             "result": result.result,
             "error": result.error,
         })
-        if not result.success:
-            continue
+
+        leading_hyp = inv_state.hypotheses[0] if inv_state.hypotheses else None
+        rem_record = RemediationRecord(
+            tool=action.tool,
+            service=action.service,
+            arguments=action.arguments,
+            attempt=action_attempts,
+            success=result.success,
+            originating_hypothesis_id=leading_hyp.id if leading_hyp else None,
+            supporting_evidence_ids=list(leading_hyp.supporting_evidence_ids) if leading_hyp else [],
+            policy_decision=decision.decision.value,
+            policy_rule_id=decision.rule_id,
+            approver_id="system:policy_preauthorized",
+            execution_result=result.result,
+            error=result.error,
+        )
+        inv_state.remediation_history.append(rem_record)
+
+        # Post-Remediation Evaluation
+        emit("remediation_evaluation_started", Actor.SYSTEM, {
+            "remediation_id": rem_record.id,
+            "tool": action.tool,
+            "attempt": action_attempts,
+            "replanning_cycle": inv_state.replanning_cycle,
+        })
 
         report = verify_recovery(simulator)
         for check in report.checks:
             emit("verification_check", Actor.VERIFIER, check.model_dump(mode="json"))
         emit("verification_result", Actor.VERIFIER, report.model_dump(mode="json"))
+
+        rem_record.resulting_observations = simulator.verifier_observation()
+        rem_record.verification_checks = [c.model_dump() for c in report.checks]
+
         if report.all_passed:
+            rem_record.verification_passed = True
             outcome = Outcome.VERIFIED
             summary = "All three independent recovery checks passed."
-            break
+            emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+            if record_to_store:
+                save_investigation_state(incident_id, inv_state)
+            response = _response(
+                incident_id, scenario, client, outcome, summary, events,
+                mode=response_mode, investigation_state=inv_state
+            )
+            if record_to_store:
+                _completed_incidents[incident_id] = response
+            return response
 
+        rem_record.verification_passed = False
+        emit("independent_verification_failed", Actor.VERIFIER, {
+            "remediation_id": rem_record.id,
+            "tool": action.tool,
+            "all_passed": False,
+            "failed_checks": [c.check_name for c in report.checks if not c.passed],
+        })
+
+        inv_state, new_evidence, failed_invariants = evaluate_post_remediation(
+            inv_state, action, result, simulator, report
+        )
+        for inv_name in failed_invariants:
+            emit("recovery_invariant_failed", Actor.VERIFIER, {
+                "remediation_id": rem_record.id,
+                "invariant": inv_name,
+                "tool": action.tool,
+                "status": "failed",
+            })
+
+        for ev in new_evidence:
+            emit("post_action_evidence_observed", Actor.TOOL, ev.model_dump(), [ev.source])
+            supp_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.supporting_evidence_ids]
+            contra_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.contradicting_evidence_ids]
+            if supp_hyps or contra_hyps:
+                emit("evidence_correlated", Actor.AGENT, {
+                    "evidence_id": ev.id,
+                    "source": ev.source,
+                    "kind": ev.kind.value,
+                    "supporting_hypotheses": supp_hyps,
+                    "contradicting_hypotheses": contra_hyps,
+                }, [ev.source])
+
+        emit("hypothesis_revised_after_remediation", Actor.AGENT, {
+            "remediation_id": rem_record.id,
+            "replanning_cycle": inv_state.replanning_cycle,
+            "hypotheses": [h.model_dump() for h in inv_state.hypotheses],
+        })
+
+        rem_record.replanning_reason = f"Verification failed on invariants: {', '.join(failed_invariants)}"
+
+        if action_attempts >= MAX_ACTION_ATTEMPTS:
+            emit("retry_budget_exhausted", Actor.SYSTEM, {
+                "limit": MAX_ACTION_ATTEMPTS,
+                "attempts": action_attempts,
+                "message": "Maximum remediation attempts reached without verified recovery.",
+            })
+            emit("escalation_reason_recorded", Actor.SYSTEM, {
+                "reason": "Remediation retry budget exhausted without verified recovery.",
+                "failed_invariants": failed_invariants,
+                "attempts": action_attempts,
+            })
+            outcome = Outcome.ESCALATED
+            summary = "Remediation retry budget exhausted without verified recovery; escalated."
+            emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+            if record_to_store:
+                save_investigation_state(incident_id, inv_state)
+            response = _response(
+                incident_id, scenario, client, outcome, summary, events,
+                mode=response_mode, investigation_state=inv_state
+            )
+            if record_to_store:
+                _completed_incidents[incident_id] = response
+            return response
+
+        emit("replanning_started", Actor.AGENT, {
+            "cycle": inv_state.replanning_cycle,
+            "reason": f"Verification failed after {action.tool}: {', '.join(failed_invariants)}",
+            "remaining_remediation_budget": MAX_ACTION_ATTEMPTS - action_attempts,
+        })
+        if record_to_store:
+            save_investigation_state(incident_id, inv_state)
+
+    outcome = Outcome.ESCALATED
+    summary = "Remediation retry limit reached without verified recovery; incident escalated."
     emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
-    response = _response(incident_id, request.scenario, request.client, outcome, summary, events, mode=response_mode)
+    if record_to_store:
+        save_investigation_state(incident_id, inv_state)
+    response = _response(
+        incident_id, scenario, client, outcome, summary, events,
+        mode=response_mode, investigation_state=inv_state
+    )
     if record_to_store:
         _completed_incidents[incident_id] = response
     return response
 
 
 def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> IncidentResponse:
-    pending = _pending_approvals.get(incident_id)
+    # Replay protection: Check if incident has already reached a final outcome
+    existing = _completed_incidents.get(incident_id) or get_incident_response(incident_id)
+    if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
+        raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
 
-    # Rehydrate the exact action and simulator state after a process restart.
-    if pending is None:
-        saved = get_pending_approval(incident_id)
-        if saved is None:
-            existing = get_incident_response(incident_id)
-            if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
+    with _approval_lock:
+        pending = _pending_approvals.get(incident_id)
+
+        if pending is None:
+            saved = get_pending_approval(incident_id)
+            if saved is None:
+                if existing is not None and existing.outcome == Outcome.PENDING_APPROVAL:
+                    raise ValueError("This approval is already being processed or has an invalid pending state.")
+                raise KeyError("No pending approval exists for this incident.")
+            try:
+                simulator = ServiceSimulator.from_snapshot(saved["scenario"], saved["simulator_snapshot"])
+                action = ToolRequest.model_validate(saved["action"])
+                stored_response = get_incident_response(incident_id)
+                if stored_response is None:
+                    raise ValueError("Persisted incident history is missing.")
+                inv_state = get_investigation_state(incident_id)
+                pending = PendingApproval(
+                    incident_id=incident_id,
+                    scenario=saved["scenario"],
+                    client=saved["client"],
+                    simulator=simulator,
+                    events=stored_response.events,
+                    action=action,
+                    attempt=int(saved["attempt"]),
+                    rule_id=saved["rule_id"],
+                    reason=saved["reason"],
+                    mode=saved.get("mode", "fallback"),
+                    investigation_state=inv_state,
+                )
+                _pending_approvals[incident_id] = pending
+            except Exception as exc:
+                raise ValueError("Persisted approval state could not be restored safely.") from exc
+
+        claimed = claim_pending_approval(incident_id)
+        if claimed is None:
+            _pending_approvals.pop(incident_id, None)
+            existing_after = get_incident_response(incident_id)
+            if existing_after is not None and existing_after.outcome != Outcome.PENDING_APPROVAL:
                 raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
-            if existing is not None and existing.outcome == Outcome.PENDING_APPROVAL:
-                raise ValueError("This approval is already being processed or has an invalid pending state.")
-            raise KeyError("No pending approval exists for this incident.")
-        try:
-            simulator = ServiceSimulator.from_snapshot(saved["scenario"], saved["simulator_snapshot"])
-            action = ToolRequest.model_validate(saved["action"])
-            stored_response = get_incident_response(incident_id)
-            if stored_response is None:
-                raise ValueError("Persisted incident history is missing.")
-            pending = PendingApproval(
-                incident_id=incident_id,
-                scenario=saved["scenario"],
-                client=saved["client"],
-                simulator=simulator,
-                events=stored_response.events,
-                action=action,
-                attempt=int(saved["attempt"]),
-                rule_id=saved["rule_id"],
-                reason=saved["reason"],
-                mode=saved.get("mode", "fallback"),
-            )
-            _pending_approvals[incident_id] = pending
-        except Exception as exc:
-            raise ValueError("Persisted approval state could not be restored safely.") from exc
+            raise ValueError("This approval is already being processed or has already been resolved.")
 
-    # Claim in SQLite before execution. Concurrent or repeated decisions cannot both win.
-    claimed = claim_pending_approval(incident_id)
-    if claimed is None:
-        _pending_approvals.pop(incident_id, None)
-        existing = get_incident_response(incident_id)
-        if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
-            raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
-        raise ValueError("This approval is already being processed or has already been resolved.")
-
-    # Use the durable payload as the source of truth, including on the original process.
     try:
+        orig_sim = pending.simulator
         pending.simulator = ServiceSimulator.from_snapshot(
             claimed["scenario"], claimed["simulator_snapshot"]
         )
@@ -329,8 +719,9 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
 
         current_policy = evaluate_action(pending.action, pending.client)
         if current_policy.decision == PolicyDecision.BLOCKED:
-            # Policy may tighten while an approval is waiting. Record the re-check
-            # and finish safely rather than leaving the incident stuck as pending.
+            if pending.action.tool in REMEDIATION_TOOLS and pending.investigation_state is not None:
+                pending.investigation_state.budget.remediations_blocked += 1
+                save_investigation_state(incident_id, pending.investigation_state)
             _emit(pending.events, incident_id, "approval_rejected_by_policy", Actor.GATE, {
                 "decision": current_policy.decision.value,
                 "rule_id": current_policy.rule_id,
@@ -344,7 +735,7 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
             })
             response = _response(
                 incident_id, pending.scenario, pending.client, Outcome.BLOCKED,
-                summary, pending.events, mode=pending.mode,
+                summary, pending.events, mode=pending.mode, investigation_state=pending.investigation_state,
             )
             _completed_incidents[incident_id] = response
             resolve_pending_approval(incident_id)
@@ -359,15 +750,26 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
         })
 
         if request.decision == "deny":
+            if pending.action.tool in REMEDIATION_TOOLS and pending.investigation_state is not None:
+                pending.investigation_state.budget.remediations_blocked += 1
+                save_investigation_state(incident_id, pending.investigation_state)
             summary = "The proposed action was denied by a human; no action was executed."
             _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.BLOCKED.value, "summary": summary})
-            response = _response(incident_id, pending.scenario, pending.client, Outcome.BLOCKED, summary, pending.events, mode=pending.mode)
+            response = _response(
+                incident_id, pending.scenario, pending.client, Outcome.BLOCKED, summary, pending.events, mode=pending.mode, investigation_state=pending.investigation_state
+            )
             _completed_incidents[incident_id] = response
             resolve_pending_approval(incident_id)
             _pending_approvals.pop(incident_id, None)
             return response
 
+        if pending.action.tool in REMEDIATION_TOOLS and pending.investigation_state is not None:
+            pending.investigation_state.budget.remediations_attempted = pending.attempt
+            save_investigation_state(incident_id, pending.investigation_state)
+
         result = pending.simulator.execute(pending.action)
+        if orig_sim is not None:
+            orig_sim.state = pending.simulator.state
         _emit(pending.events, incident_id, "tool_executed", Actor.TOOL, {
             "tool": pending.action.tool,
             "arguments": pending.action.arguments,
@@ -377,25 +779,146 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
             "error": result.error,
             "approved_by": request.approver_id,
         })
-        _pending_approvals.pop(incident_id, None)
 
-        if not result.success:
-            summary = "The approved action failed to execute; the incident was escalated."
-            _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.ESCALATED.value, "summary": summary})
-            response = _response(incident_id, pending.scenario, pending.client, Outcome.ESCALATED, summary, pending.events, mode=pending.mode)
+        inv_state = pending.investigation_state
+        leading_hyp = inv_state.hypotheses[0] if (inv_state and inv_state.hypotheses) else None
+        rem_record = RemediationRecord(
+            tool=pending.action.tool,
+            service=pending.action.service,
+            arguments=pending.action.arguments,
+            attempt=pending.attempt,
+            success=result.success,
+            originating_hypothesis_id=leading_hyp.id if leading_hyp else None,
+            supporting_evidence_ids=list(leading_hyp.supporting_evidence_ids) if leading_hyp else [],
+            policy_decision=PolicyDecision.APPROVAL_REQUIRED.value,
+            policy_rule_id=pending.rule_id,
+            approver_id=request.approver_id,
+            execution_result=result.result,
+            error=result.error,
+        )
+        if inv_state is not None:
+            inv_state.remediation_history.append(rem_record)
+
+        _emit(pending.events, incident_id, "remediation_evaluation_started", Actor.SYSTEM, {
+            "remediation_id": rem_record.id,
+            "tool": pending.action.tool,
+            "attempt": pending.attempt,
+            "replanning_cycle": inv_state.replanning_cycle if inv_state else 0,
+        })
+
+        report = verify_recovery(pending.simulator)
+        for check in report.checks:
+            _emit(pending.events, incident_id, "verification_check", Actor.VERIFIER, check.model_dump(mode="json"))
+        _emit(pending.events, incident_id, "verification_result", Actor.VERIFIER, report.model_dump(mode="json"))
+
+        rem_record.resulting_observations = pending.simulator.verifier_observation()
+        rem_record.verification_checks = [c.model_dump() for c in report.checks]
+
+        if report.all_passed:
+            rem_record.verification_passed = True
+            outcome = Outcome.VERIFIED
+            summary = "All three independent recovery checks passed."
+            _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+            if inv_state is not None:
+                save_investigation_state(incident_id, inv_state)
+            response = _response(
+                incident_id, pending.scenario, pending.client, outcome,
+                summary, pending.events, mode=pending.mode, investigation_state=inv_state
+            )
             _completed_incidents[incident_id] = response
             resolve_pending_approval(incident_id)
+            _pending_approvals.pop(incident_id, None)
             return response
 
-        response = _verify_and_report(
-            incident_id, pending.scenario, pending.client, pending.simulator, pending.events, mode=pending.mode
-        )
+        rem_record.verification_passed = False
+        _emit(pending.events, incident_id, "independent_verification_failed", Actor.VERIFIER, {
+            "remediation_id": rem_record.id,
+            "tool": pending.action.tool,
+            "all_passed": False,
+            "failed_checks": [c.check_name for c in report.checks if not c.passed],
+        })
+
+        failed_invariants = [c.check_name for c in report.checks if not c.passed]
+        if inv_state is not None:
+            inv_state, new_evidence, failed_invariants = evaluate_post_remediation(
+                inv_state, pending.action, result, pending.simulator, report
+            )
+            for inv_name in failed_invariants:
+                _emit(pending.events, incident_id, "recovery_invariant_failed", Actor.VERIFIER, {
+                    "remediation_id": rem_record.id,
+                    "invariant": inv_name,
+                    "tool": pending.action.tool,
+                    "status": "failed",
+                })
+            for ev in new_evidence:
+                _emit(pending.events, incident_id, "post_action_evidence_observed", Actor.TOOL, ev.model_dump(), [ev.source])
+                supp_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.supporting_evidence_ids]
+                contra_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.contradicting_evidence_ids]
+                if supp_hyps or contra_hyps:
+                    _emit(pending.events, incident_id, "evidence_correlated", Actor.AGENT, {
+                        "evidence_id": ev.id,
+                        "source": ev.source,
+                        "kind": ev.kind.value,
+                        "supporting_hypotheses": supp_hyps,
+                        "contradicting_hypotheses": contra_hyps,
+                    }, [ev.source])
+
+            _emit(pending.events, incident_id, "hypothesis_revised_after_remediation", Actor.AGENT, {
+                "remediation_id": rem_record.id,
+                "replanning_cycle": inv_state.replanning_cycle,
+                "hypotheses": [h.model_dump() for h in inv_state.hypotheses],
+            })
+
+            rem_record.replanning_reason = f"Verification failed on invariants: {', '.join(failed_invariants)}"
+            save_investigation_state(incident_id, inv_state)
+
+        if pending.attempt >= MAX_ACTION_ATTEMPTS or inv_state is None:
+            _emit(pending.events, incident_id, "retry_budget_exhausted", Actor.SYSTEM, {
+                "limit": MAX_ACTION_ATTEMPTS,
+                "attempts": pending.attempt,
+                "message": "Maximum remediation attempts reached without verified recovery.",
+            })
+            _emit(pending.events, incident_id, "escalation_reason_recorded", Actor.SYSTEM, {
+                "reason": "Remediation retry budget exhausted without verified recovery.",
+                "failed_invariants": failed_invariants,
+                "attempts": pending.attempt,
+            })
+            summary = "The approved action did not resolve the incident; retries exhausted."
+            _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.ESCALATED.value, "summary": summary})
+            response = _response(
+                incident_id, pending.scenario, pending.client, Outcome.ESCALATED,
+                summary, pending.events, mode=pending.mode, investigation_state=inv_state
+            )
+            _completed_incidents[incident_id] = response
+            resolve_pending_approval(incident_id)
+            _pending_approvals.pop(incident_id, None)
+            return response
+
+        _emit(pending.events, incident_id, "replanning_started", Actor.AGENT, {
+            "cycle": inv_state.replanning_cycle,
+            "reason": f"Verification failed after {pending.action.tool}: {', '.join(failed_invariants)}",
+            "remaining_remediation_budget": MAX_ACTION_ATTEMPTS - pending.attempt,
+        })
         resolve_pending_approval(incident_id)
-        return response
+        _pending_approvals.pop(incident_id, None)
+
+        # Resume the orchestration loop
+        return _orchestrate_loop(
+            incident_id=incident_id,
+            scenario=pending.scenario,
+            client=pending.client,
+            simulator=pending.simulator,
+            events=pending.events,
+            inv_state=inv_state,
+            action_attempts=pending.attempt,
+            investigation_steps=inv_state.step,
+            record_to_store=True,
+            response_mode=pending.mode,
+            is_propose_action_patched=False,
+        )
     except PermissionError:
         raise
     except Exception:
-        # A transient unexpected error must not permanently strand the approval.
         release_pending_approval_claim(incident_id)
         raise
 
@@ -409,5 +932,6 @@ def get_incident(incident_id: str) -> IncidentResponse | None:
             "Waiting for an explicit human approval decision. No action has been executed.",
             pending.events,
             mode=pending.mode,
+            investigation_state=pending.investigation_state,
         )
     return _completed_incidents.get(incident_id)

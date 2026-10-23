@@ -10,13 +10,26 @@ interface BenchmarkViewProps {
 }
 
 export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
-  availableScenarios = ['clean_recovery', 'false_green', 'stale_runbook', 'hostile_log'],
+  availableScenarios = [
+    'clean_recovery',
+    'false_green',
+    'stale_runbook',
+    'hostile_log',
+    'first_fix_fails',
+    'partial_recovery',
+    'misleading_health_signal',
+    'unprovable_recovery',
+  ],
   availableClients = ['client_a', 'client_b'],
 }) => {
   const [selectedScenarios, setSelectedScenarios] = useState<string[]>([
     'clean_recovery',
     'false_green',
     'hostile_log',
+    'first_fix_fails',
+    'partial_recovery',
+    'misleading_health_signal',
+    'unprovable_recovery',
   ]);
   const [selectedClient, setSelectedClient] = useState<string>('client_a');
   const [trials, setTrials] = useState<number>(3);
@@ -512,6 +525,88 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
                       Escalates unrecoverable false greens
                     </td>
                   </tr>
+
+                  {/* Recovery After Failed 1st Action */}
+                  {plMetrics.recovery_after_failed_first_action && (
+                    <tr>
+                      <td className="p-3">
+                        <strong className="text-zinc-900">Recovery After Failed 1st Action</strong>
+                        <div className="text-[11px] text-zinc-500 font-sans">Multi-stage adaptive replanning</div>
+                      </td>
+                      <td className="p-3">
+                        <span>{bMetrics.recovery_after_failed_first_action?.value ?? 0}%</span>
+                        <span className="text-zinc-400 text-[11px] ml-1.5">
+                          ({bMetrics.recovery_after_failed_first_action?.formula ?? '0/0'})
+                        </span>
+                      </td>
+                      <td className="p-3 font-bold text-emerald-700">
+                        <span>{plMetrics.recovery_after_failed_first_action.value}%</span>
+                        <span className="text-zinc-500 font-normal text-[11px] ml-1.5">
+                          ({plMetrics.recovery_after_failed_first_action.formula})
+                        </span>
+                      </td>
+                      <td className="p-3 text-emerald-700 font-bold">
+                        Adapts to ineffective first action
+                      </td>
+                    </tr>
+                  )}
+
+                  {/* Repeated Ineffective Action Rate */}
+                  {plMetrics.repeated_ineffective_action_rate && (
+                    <tr>
+                      <td className="p-3">
+                        <strong className="text-zinc-900">Repeated Ineffective Action Rate</strong>
+                        <div className="text-[11px] text-zinc-500 font-sans">Suppression of looping failed actions</div>
+                      </td>
+                      <td className="p-3">
+                        <span className={(bMetrics.repeated_ineffective_action_rate?.value ?? 0) > 0 ? 'text-red-600 font-bold' : ''}>
+                          {bMetrics.repeated_ineffective_action_rate?.value ?? 0}%
+                        </span>
+                        <span className="text-zinc-400 text-[11px] ml-1.5">
+                          ({bMetrics.repeated_ineffective_action_rate?.formula ?? '0/0'})
+                        </span>
+                      </td>
+                      <td className="p-3 font-bold text-emerald-700">
+                        <span>{plMetrics.repeated_ineffective_action_rate.value}%</span>
+                        <span className="text-zinc-500 font-normal text-[11px] ml-1.5">
+                          (Zero duplicate actions)
+                        </span>
+                      </td>
+                      <td className="p-3 text-cyan-700 font-bold">
+                        Zero blind loops or repetitions
+                      </td>
+                    </tr>
+                  )}
+
+                  {/* Diagnostics per Run */}
+                  {plMetrics.avg_diagnostics_per_run && (
+                    <tr>
+                      <td className="p-3">
+                        <strong className="text-zinc-900">Avg Diagnostics per Run</strong>
+                        <div className="text-[11px] text-zinc-500 font-sans">Read-only diagnostic tool executions</div>
+                      </td>
+                      <td className="p-3">{bMetrics.avg_diagnostics_per_run?.value ?? 0}</td>
+                      <td className="p-3 font-bold text-cyan-700">{plMetrics.avg_diagnostics_per_run.value}</td>
+                      <td className="p-3 text-zinc-600 font-sans text-xs">
+                        Targeted EIV diagnostic selection
+                      </td>
+                    </tr>
+                  )}
+
+                  {/* Remediations per Run */}
+                  {plMetrics.avg_remediations_per_run && (
+                    <tr>
+                      <td className="p-3">
+                        <strong className="text-zinc-900">Avg Remediations per Run</strong>
+                        <div className="text-[11px] text-zinc-500 font-sans">Mutating remediation dispatches</div>
+                      </td>
+                      <td className="p-3">{bMetrics.avg_remediations_per_run?.value ?? 0}</td>
+                      <td className="p-3 font-bold">{plMetrics.avg_remediations_per_run.value}</td>
+                      <td className="p-3 text-zinc-600 font-sans text-xs">
+                        Bounded multi-stage recovery attempts
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
