@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import ssl
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -22,8 +23,29 @@ from .simulator import ServiceSimulator
 
 logger = logging.getLogger(__name__)
 
-# Resolve the backend .env explicitly so loading does not depend on the process CWD.
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
+def load_environment() -> None:
+    """Load configuration with explicit precedence:
+    1. Active process environment variables (override=False ensures they are preserved).
+    2. Explicit PROOFLOOP_ENV_FILE path (if set and points to an existing file).
+    3. backend/.env (component-level configuration).
+    4. root/.env (repository-level configuration).
+    """
+    explicit_file = os.getenv("PROOFLOOP_ENV_FILE")
+    if explicit_file:
+        p = Path(explicit_file).resolve()
+        if p.is_file():
+            load_dotenv(dotenv_path=p, override=False)
+
+    backend_env = Path(__file__).resolve().parents[1] / ".env"
+    if backend_env.is_file():
+        load_dotenv(dotenv_path=backend_env, override=False)
+
+    root_env = Path(__file__).resolve().parents[2] / ".env"
+    if root_env.is_file():
+        load_dotenv(dotenv_path=root_env, override=False)
+
+
+load_environment()
 
 
 class InvestigatorProposal(BaseModel):
@@ -62,6 +84,17 @@ def _evidence(simulator: ServiceSimulator) -> dict[str, Any]:
     }
 
 
+def _ssl_context() -> ssl.SSLContext | None:
+    try:
+        import certifi  # type: ignore[import-untyped]
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            return None
+
+
 def _request_json(
     url: str,
     payload: dict[str, Any],
@@ -78,7 +111,8 @@ def _request_json(
         method="POST",
     )
     timeout = float(os.getenv("PROOFLOOP_LLM_TIMEOUT_SECONDS", "20"))
-    with urlopen(request, timeout=max(1.0, min(timeout, 30.0))) as response:
+    ctx = _ssl_context()
+    with urlopen(request, timeout=max(1.0, min(timeout, 30.0)), context=ctx) as response:
         decoded = json.loads(response.read().decode("utf-8"))
     if not isinstance(decoded, dict):
         raise ValueError("Provider response must be a JSON object")

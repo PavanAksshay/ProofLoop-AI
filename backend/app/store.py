@@ -59,6 +59,17 @@ def initialize_store() -> None:
                 FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS benchmarks (
+                run_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                params_json TEXT NOT NULL,
+                result_json TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
 
 def create_incident(incident_id: str, scenario: str, client: str, outcome: Outcome = Outcome.RUNNING, summary: str = "Incident started.") -> None:
@@ -275,3 +286,75 @@ def update_incident_mode(incident_id: str, mode: str) -> None:
             "UPDATE incidents SET mode = ?, updated_at = CURRENT_TIMESTAMP WHERE incident_id = ?",
             (mode, incident_id),
         )
+
+
+def save_benchmark(run_id: str, status: str, params: dict[str, Any], result: dict[str, Any] | None = None, error: str | None = None) -> None:
+    initialize_store()
+    params_str = json.dumps(params, separators=(",", ":"), default=str)
+    result_str = json.dumps(result, separators=(",", ":"), default=str) if result is not None else None
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO benchmarks (run_id, status, params_json, result_json, error_message)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(run_id) DO UPDATE SET
+                   status = excluded.status,
+                   params_json = excluded.params_json,
+                   result_json = excluded.result_json,
+                   error_message = excluded.error_message,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (run_id, status, params_str, result_str, error),
+        )
+
+
+def update_benchmark(run_id: str, status: str, result: dict[str, Any] | None = None, error: str | None = None) -> None:
+    initialize_store()
+    result_str = json.dumps(result, separators=(",", ":"), default=str) if result is not None else None
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE benchmarks SET
+                   status = ?,
+                   result_json = coalesce(?, result_json),
+                   error_message = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE run_id = ?""",
+            (status, result_str, error, run_id),
+        )
+
+
+def get_benchmark(run_id: str) -> dict[str, Any] | None:
+    initialize_store()
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM benchmarks WHERE run_id = ?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row["run_id"],
+            "status": row["status"],
+            "parameters": json.loads(row["params_json"]),
+            "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "error_message": row["error_message"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def list_benchmarks(limit: int = 20) -> list[dict[str, Any]]:
+    initialize_store()
+    safe_limit = max(1, min(limit, 100))
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT run_id, status, params_json, error_message, created_at, updated_at FROM benchmarks ORDER BY created_at DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+        return [
+            {
+                "run_id": row["run_id"],
+                "status": row["status"],
+                "parameters": json.loads(row["params_json"]),
+                "error_message": row["error_message"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+

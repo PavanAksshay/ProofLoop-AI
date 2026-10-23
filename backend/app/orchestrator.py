@@ -30,6 +30,15 @@ from .store import (
 
 
 MAX_ACTION_ATTEMPTS = 3
+MAX_INVESTIGATION_STEPS = 8
+
+REMEDIATION_TOOLS = {
+    "rollback_config",
+    "restart_service",
+    "scale_service",
+    "clear_cache",
+    "modify_database",
+}
 
 
 @dataclass
@@ -71,7 +80,7 @@ def _response(
     )
 
 
-def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, payload: dict, refs: list[str] | None = None) -> None:
+def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, payload: dict, refs: list[str] | None = None, persist: bool = True) -> None:
     event = Event(
         incident_id=incident_id,
         type=event_type,
@@ -80,7 +89,8 @@ def _emit(events: list[Event], incident_id: str, event_type: str, actor: Actor, 
         evidence_refs=refs or [],
     )
     events.append(event)
-    append_event(event)
+    if persist:
+        append_event(event)
 
 
 def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: ServiceSimulator, events: list[Event], mode: str = "fallback") -> IncidentResponse:
@@ -100,28 +110,37 @@ def _verify_and_report(incident_id: str, scenario: str, client: str, simulator: 
     return response
 
 
-def run_incident(request: IncidentRunRequest, incident_id: str | None = None) -> IncidentResponse:
+def run_incident(
+    request: IncidentRunRequest,
+    incident_id: str | None = None,
+    simulator: ServiceSimulator | None = None,
+    record_to_store: bool = True,
+) -> IncidentResponse:
     incident_id = incident_id or str(uuid4())
     events: list[Event] = []
 
-    try:
-        simulator = ServiceSimulator(request.scenario)
-    except ValueError as exc:
-        raise ValueError(str(exc)) from exc
+    def emit(event_type: str, actor: Actor, payload: dict, refs: list[str] | None = None) -> None:
+        _emit(events, incident_id, event_type, actor, payload, refs, persist=record_to_store)
 
-    if not incident_exists(incident_id):
+    if simulator is None:
+        try:
+            simulator = ServiceSimulator(request.scenario, getattr(request, "custom_params", None))
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    if record_to_store and not incident_exists(incident_id):
         create_incident(incident_id, request.scenario, request.client, Outcome.RUNNING, "Incident started.")
 
-    _emit(events, incident_id, "incident_opened", Actor.SYSTEM, {
+    emit("incident_opened", Actor.SYSTEM, {
         "scenario": request.scenario,
         "client": request.client,
         "requested_mode": request.mode,
     })
     logs = simulator.read_logs("checkout-service").result.get("logs", [])
-    _emit(events, incident_id, "evidence_collected", Actor.TOOL, {"source": "logs", "excerpt": logs}, ["logs:checkout-service"])
+    emit("evidence_collected", Actor.TOOL, {"source": "logs", "excerpt": logs}, ["logs:checkout-service"])
 
     if any("ignore policy" in line.lower() or "delete the database" in line.lower() for line in logs):
-        _emit(events, incident_id, "injection_detected", Actor.SYSTEM, {
+        emit("injection_detected", Actor.SYSTEM, {
             "message": "Instruction-like text detected in untrusted log data; treated as data."
         }, ["logs:checkout-service"])
 
@@ -129,12 +148,28 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
     summary = "Incident reached a safe stop without a verified recovery."
     response_mode = "fallback"
 
-    for attempt in range(MAX_ACTION_ATTEMPTS):
+    action_attempts = 0
+    investigation_steps = 1  # Step 1: initial log evidence collection
+
+    while action_attempts < MAX_ACTION_ATTEMPTS:
+        if investigation_steps >= MAX_INVESTIGATION_STEPS:
+            emit("investigation_limit_reached", Actor.SYSTEM, {
+                "limit": MAX_INVESTIGATION_STEPS,
+                "steps": investigation_steps,
+                "message": f"Investigation step limit ({MAX_INVESTIGATION_STEPS}) reached without resolution; escalating incident.",
+            })
+            outcome = Outcome.ESCALATED
+            summary = f"Investigation step limit ({MAX_INVESTIGATION_STEPS}) reached without resolution; incident escalated."
+            break
+
+        investigation_steps += 1
         action, rationale, evidence_refs, selected_mode = propose_action(simulator)
         response_mode = selected_mode
-        update_incident_mode(incident_id, selected_mode)
-        _emit(events, incident_id, "action_proposed", Actor.AGENT, {
-            "attempt": attempt + 1,
+        if record_to_store:
+            update_incident_mode(incident_id, selected_mode)
+        emit("action_proposed", Actor.AGENT, {
+            "attempt": action_attempts + 1,
+            "investigation_step": investigation_steps,
             "mode": selected_mode,
             "tool": action.tool,
             "service": action.service,
@@ -143,7 +178,7 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
         }, evidence_refs)
 
         decision = evaluate_action(action, request.client)
-        _emit(events, incident_id, "policy_decision", Actor.GATE, decision.model_dump(mode="json"), evidence_refs)
+        emit("policy_decision", Actor.GATE, decision.model_dump(mode="json"), evidence_refs)
 
         if decision.decision == PolicyDecision.BLOCKED:
             outcome = Outcome.BLOCKED
@@ -153,13 +188,14 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
         if decision.decision == PolicyDecision.APPROVAL_REQUIRED:
             # No simulator call occurs before the human decision.
             before = simulator.snapshot()
-            _emit(events, incident_id, "approval_requested", Actor.SYSTEM, {
+            emit("approval_requested", Actor.SYSTEM, {
                 "tool": action.tool,
                 "service": action.service,
                 "arguments": action.arguments,
                 "rule_id": decision.rule_id,
                 "reason": decision.reason,
-                "attempt": attempt + 1,
+                "attempt": action_attempts + 1,
+                "investigation_step": investigation_steps,
             }, evidence_refs)
             if simulator.snapshot() != before:
                 raise RuntimeError("Simulator mutated while approval was pending")
@@ -170,23 +206,25 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
                 simulator=simulator,
                 events=events,
                 action=action,
-                attempt=attempt + 1,
+                attempt=action_attempts + 1,
                 rule_id=decision.rule_id,
                 reason=decision.reason,
                 mode=selected_mode,
             )
-            _pending_approvals[incident_id] = pending
-            save_pending_approval(incident_id, {
-                "incident_id": incident_id,
-                "scenario": request.scenario,
-                "client": request.client,
-                "simulator_snapshot": simulator.snapshot(),
-                "action": action.model_dump(mode="json"),
-                "attempt": attempt + 1,
-                "rule_id": decision.rule_id,
-                "reason": decision.reason,
-                "mode": selected_mode,
-            })
+            if record_to_store:
+                _pending_approvals[incident_id] = pending
+                save_pending_approval(incident_id, {
+                    "incident_id": incident_id,
+                    "scenario": request.scenario,
+                    "client": request.client,
+                    "simulator_snapshot": simulator.snapshot(),
+                    "action": action.model_dump(mode="json"),
+                    "attempt": action_attempts + 1,
+                    "investigation_step": investigation_steps,
+                    "rule_id": decision.rule_id,
+                    "reason": decision.reason,
+                    "mode": selected_mode,
+                })
             response = _response(
                 incident_id, request.scenario, request.client,
                 Outcome.PENDING_APPROVAL,
@@ -201,8 +239,11 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
             summary = str(action.arguments.get("summary", "Escalated to a human operator."))
             break
 
+        if action.tool in REMEDIATION_TOOLS:
+            action_attempts += 1
+
         result = simulator.execute(action)
-        _emit(events, incident_id, "tool_executed", Actor.TOOL, {
+        emit("tool_executed", Actor.TOOL, {
             "tool": action.tool,
             "arguments": action.arguments,
             "success": result.success,
@@ -215,16 +256,17 @@ def run_incident(request: IncidentRunRequest, incident_id: str | None = None) ->
 
         report = verify_recovery(simulator)
         for check in report.checks:
-            _emit(events, incident_id, "verification_check", Actor.VERIFIER, check.model_dump(mode="json"))
-        _emit(events, incident_id, "verification_result", Actor.VERIFIER, report.model_dump(mode="json"))
+            emit("verification_check", Actor.VERIFIER, check.model_dump(mode="json"))
+        emit("verification_result", Actor.VERIFIER, report.model_dump(mode="json"))
         if report.all_passed:
             outcome = Outcome.VERIFIED
             summary = "All three independent recovery checks passed."
             break
 
-    _emit(events, incident_id, "outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
+    emit("outcome", Actor.SYSTEM, {"outcome": outcome.value, "summary": summary})
     response = _response(incident_id, request.scenario, request.client, outcome, summary, events, mode=response_mode)
-    _completed_incidents[incident_id] = response
+    if record_to_store:
+        _completed_incidents[incident_id] = response
     return response
 
 

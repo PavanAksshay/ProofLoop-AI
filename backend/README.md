@@ -4,6 +4,16 @@
 
 From this directory:
 
+### macOS and Linux
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest -v
+uvicorn app.main:app --reload
+```
+
+### Windows (PowerShell)
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1

@@ -26,6 +26,7 @@ Thumbs.db
 # Local runtime artifacts
 *.jsonl
 logs/
+benchmark/results/
 
 # Local SQLite runtime database
 *.db
