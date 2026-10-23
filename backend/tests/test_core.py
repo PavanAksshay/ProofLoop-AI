@@ -130,3 +130,89 @@ def test_api_exposes_approval_workflow():
     )
     assert approved.status_code == 200
     assert approved.json()["outcome"] == "VERIFIED"
+
+
+def test_modify_database_synthetic_allowlist_operations():
+    simulator = ServiceSimulator("clean_recovery")
+    simulator.state.dependencies_healthy = False
+    before_minutes = simulator.state.simulated_minutes
+
+    # Test 'repair'
+    repair_req = ToolRequest(tool="modify_database", service="checkout-service", arguments={"operation": "repair"})
+    result_repair = simulator.execute(repair_req)
+    assert result_repair.success is True
+    assert result_repair.result["synthetic"] is True
+    assert simulator.state.dependencies_healthy is True
+    assert simulator.state.simulated_minutes == before_minutes + 1
+
+    # Test 'reindex' and 'sync_schema'
+    for op in ("reindex", "sync_schema"):
+        res = simulator.execute(ToolRequest(tool="modify_database", service="checkout-service", arguments={"operation": op}))
+        assert res.success is True
+        assert res.result["operation"] == op
+
+
+def test_modify_database_disallowed_and_sql_rejection():
+    simulator = ServiceSimulator("clean_recovery")
+
+    # Unsupported operation
+    disallowed = simulator.execute(ToolRequest(tool="modify_database", service="checkout-service", arguments={"operation": "drop_table"}))
+    assert disallowed.success is False
+    assert disallowed.error == "DISALLOWED_OPERATION"
+
+    # Arbitrary SQL injection attempt
+    sql_attempt = simulator.execute(ToolRequest(
+        tool="modify_database",
+        service="checkout-service",
+        arguments={"operation": "repair", "sql": "DROP DATABASE production;"},
+    ))
+    assert sql_attempt.success is False
+    assert sql_attempt.error == "RAW_SQL_PROHIBITED"
+
+    # Missing operation
+    missing_op = simulator.execute(ToolRequest(tool="modify_database", service="checkout-service", arguments={}))
+    assert missing_op.success is False
+    assert missing_op.error == "MISSING_OPERATION"
+
+
+def test_modify_database_approval_execution_lifecycle():
+    # Setup an incident with pending approval for modify_database
+    simulator = ServiceSimulator("clean_recovery")
+    action = ToolRequest(tool="modify_database", service="checkout-service", arguments={"operation": "repair"})
+    assert evaluate_action(action, "client_a").decision == PolicyDecision.APPROVAL_REQUIRED
+
+    from app.orchestrator import _pending_approvals, PendingApproval, decide_approval
+    incident_id = "test-modify-db-lifecycle"
+    _pending_approvals[incident_id] = PendingApproval(
+        incident_id=incident_id,
+        scenario="clean_recovery",
+        client="client_a",
+        simulator=simulator,
+        events=[],
+        action=action,
+        attempt=1,
+        rule_id="POL-DB-APPROVAL",
+        reason="Database mutations require explicit human approval.",
+    )
+    from app.store import save_pending_approval
+    save_pending_approval(incident_id, {
+        "incident_id": incident_id,
+        "scenario": "clean_recovery",
+        "client": "client_a",
+        "simulator_snapshot": simulator.snapshot(),
+        "action": action.model_dump(mode="json"),
+        "attempt": 1,
+        "rule_id": "POL-DB-APPROVAL",
+        "reason": "Database mutations require explicit human approval.",
+    })
+
+    # Approve the database action
+    decision = ApprovalDecisionRequest(decision="approve", approver_id="dba-operator", comment="Approved repair")
+    completed = decide_approval(incident_id, decision)
+    assert any(
+        event.type == "tool_executed"
+        and event.payload.get("tool") == "modify_database"
+        and event.payload.get("success") is True
+        for event in completed.events
+    )
+    _pending_approvals.pop(incident_id, None)

@@ -40,6 +40,17 @@ This is a synthetic prototype, not production-ready IT automation. The backend's
 
 ## Quick start
 
+### macOS and Linux
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest -v
+uvicorn app.main:app --reload
+```
+
+### Windows (PowerShell)
 ```powershell
 cd backend
 python -m venv .venv

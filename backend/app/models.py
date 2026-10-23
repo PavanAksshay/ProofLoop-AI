@@ -36,6 +36,14 @@ class Outcome(str, Enum):
     RUNNING = "RUNNING"
 
 
+TERMINAL_OUTCOMES: set[Outcome] = {
+    Outcome.VERIFIED,
+    Outcome.UNVERIFIED,
+    Outcome.BLOCKED,
+    Outcome.ESCALATED,
+}
+
+
 class Event(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     incident_id: str
@@ -46,10 +54,20 @@ class Event(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+class CustomScenarioParams(BaseModel):
+    custom_logs: list[str] = Field(default_factory=list)
+    initial_error_rate: float = Field(default=0.8, ge=0.0, le=1.0)
+    config_version: str = "v_bad"
+    checkout_failures: int = 5
+    health_endpoint_status: int = 503
+    description: str = "User-defined custom incident."
+
+
 class IncidentRunRequest(BaseModel):
     scenario: str = "clean_recovery"
     client: str = "client_a"
     mode: str = "proofloop"
+    custom_params: CustomScenarioParams | None = None
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -104,3 +122,21 @@ class IncidentResponse(BaseModel):
     summary: str
     mode: str
     events: list[Event]
+
+
+class BenchmarkRunRequest(BaseModel):
+    scenarios: list[str] = Field(default_factory=lambda: ["clean_recovery", "false_green", "stale_runbook", "hostile_log"])
+    client: str = Field(default="client_a", min_length=1, max_length=50)
+    trials: int = Field(default=3, ge=1, le=20)
+    seed: int = Field(default=42)
+
+    @field_validator("scenarios")
+    @classmethod
+    def validate_scenarios(cls, values: list[str]) -> list[str]:
+        if not values:
+            raise ValueError("scenarios list cannot be empty")
+        for s in values:
+            if not isinstance(s, str) or not s.strip():
+                raise ValueError("each scenario must be a non-empty string")
+        return values
+

@@ -3,6 +3,7 @@
 These tests isolate HTTP behavior from the developer's local SQLite database and
 external LLM providers. Execution-policy behavior is covered by orchestrator tests.
 """
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
@@ -193,4 +194,115 @@ def test_approval_endpoint_persists_final_outcome_and_events(monkeypatch):
     assert persisted_status == [
         ("incident-1", Outcome.BLOCKED, response_model.summary)
     ]
+
+
+def test_cors_preflight_allows_configured_vite_origins():
+    with TestClient(main.app) as client:
+        # Test localhost origin
+        response_localhost = client.options(
+            "/incidents",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert response_localhost.status_code == 200
+        assert response_localhost.headers["access-control-allow-origin"] == "http://localhost:5173"
+        assert "POST" in response_localhost.headers["access-control-allow-methods"]
+
+        # Test 127.0.0.1 origin
+        response_ip = client.options(
+            "/incidents",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert response_ip.status_code == 200
+        assert response_ip.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
+def test_cors_preflight_rejects_unauthorized_origins():
+    with TestClient(main.app) as client:
+        response = client.options(
+            "/incidents",
+            headers={
+                "Origin": "http://malicious-external-site.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert response.headers.get("access-control-allow-origin") != "http://malicious-external-site.com"
+
+
+def test_cors_actual_request_includes_allow_origin_header():
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/scenarios",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+@pytest.mark.anyio
+async def test_sse_stream_stays_open_on_pending_approval_and_completes_on_terminal_outcome(monkeypatch):
+    """Ensure SSE stream does not terminate while in PENDING_APPROVAL and closes at terminal outcome."""
+    events_db = [
+        {
+            "sequence": 1,
+            "event_id": "event-1",
+            "incident_id": "stream-test",
+            "timestamp": "2026-10-23T10:00:00+00:00",
+            "type": "approval_requested",
+            "actor": "system",
+            "payload": {"tool": "rollback_config"},
+            "evidence_refs": [],
+        }
+    ]
+
+    current_state = {"outcome": Outcome.PENDING_APPROVAL}
+    poll_count = 0
+
+    def fake_events_after(incident_id, after):
+        return [row for row in events_db if row["sequence"] > after]
+
+    def fake_get_incident(incident_id):
+        nonlocal poll_count
+        poll_count += 1
+        # On the second check after delivering approval_requested, simulate that the approval resolved to VERIFIED
+        if poll_count >= 2 and current_state["outcome"] == Outcome.PENDING_APPROVAL:
+            events_db.append({
+                "sequence": 2,
+                "event_id": "event-2",
+                "incident_id": "stream-test",
+                "timestamp": "2026-10-23T10:00:01+00:00",
+                "type": "outcome",
+                "actor": "system",
+                "payload": {"outcome": "VERIFIED"},
+                "evidence_refs": [],
+            })
+            current_state["outcome"] = Outcome.VERIFIED
+        return type("MockIncident", (), {"outcome": current_state["outcome"]})()
+
+    monkeypatch.setattr(main, "incident_exists", lambda incident_id: True)
+    monkeypatch.setattr(main, "events_after", fake_events_after)
+    monkeypatch.setattr(main, "get_incident_response", fake_get_incident)
+    original_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda _s: original_sleep(0.001))
+
+    class MockRequest:
+        async def is_disconnected(self):
+            return False
+
+    streaming_response = await main.stream_incident_events(MockRequest(), "stream-test", after=0)
+    received = []
+    async for chunk in streaming_response.body_iterator:
+        received.append(chunk)
+
+    full_output = "".join(received)
+    assert "event: approval_requested" in full_output
+    assert "event: outcome" in full_output
+    assert "id: 1" in full_output
+    assert "id: 2" in full_output
 
