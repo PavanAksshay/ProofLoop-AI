@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .models import Event, IncidentResponse, Outcome
+from .models import Event, IncidentResponse, InvestigationState, Outcome
 
 DB_PATH = Path(os.environ.get("PROOFLOOP_DB_PATH", str(Path(__file__).resolve().parents[1] / "proofloop.db")))
 
@@ -70,6 +70,17 @@ def initialize_store() -> None:
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS investigation_states (
+                incident_id TEXT PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                step INTEGER NOT NULL DEFAULT 0,
+                current_diagnosis TEXT,
+                confidence REAL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            )
+        """)
 
 
 def create_incident(incident_id: str, scenario: str, client: str, outcome: Outcome = Outcome.RUNNING, summary: str = "Incident started.") -> None:
@@ -117,6 +128,40 @@ def update_incident_status(incident_id: str, outcome: Outcome, summary: str) -> 
         )
 
 
+def save_investigation_state(incident_id: str, state: InvestigationState) -> None:
+    initialize_store()
+    state_json = state.model_dump_json()
+    diagnosis = state.current_diagnosis.diagnosis if state.current_diagnosis else None
+    confidence = state.current_diagnosis.confidence if state.current_diagnosis else 0.0
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO investigation_states (incident_id, state_json, step, current_diagnosis, confidence, updated_at)
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(incident_id) DO UPDATE SET
+                   state_json = excluded.state_json,
+                   step = excluded.step,
+                   current_diagnosis = excluded.current_diagnosis,
+                   confidence = excluded.confidence,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (incident_id, state_json, state.step, diagnosis, confidence),
+        )
+
+
+def get_investigation_state(incident_id: str) -> InvestigationState | None:
+    initialize_store()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT state_json FROM investigation_states WHERE incident_id = ?",
+            (incident_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return InvestigationState.model_validate_json(row["state_json"])
+        except Exception:
+            return None
+
+
 def get_incident_response(incident_id: str) -> IncidentResponse | None:
     initialize_store()
     with _connect() as conn:
@@ -127,6 +172,10 @@ def get_incident_response(incident_id: str) -> IncidentResponse | None:
             "SELECT * FROM incident_events WHERE incident_id = ? ORDER BY sequence",
             (incident_id,),
         ).fetchall()
+        inv_row = conn.execute(
+            "SELECT state_json FROM investigation_states WHERE incident_id = ?",
+            (incident_id,),
+        ).fetchone()
 
     events = [
         Event(
@@ -140,6 +189,14 @@ def get_incident_response(incident_id: str) -> IncidentResponse | None:
         )
         for item in event_rows
     ]
+
+    inv_state = None
+    if inv_row is not None:
+        try:
+            inv_state = InvestigationState.model_validate_json(inv_row["state_json"])
+        except Exception:
+            inv_state = None
+
     return IncidentResponse(
         incident_id=row["incident_id"],
         scenario=row["scenario"],
@@ -148,6 +205,7 @@ def get_incident_response(incident_id: str) -> IncidentResponse | None:
         summary=row["summary"],
         mode=row["mode"],
         events=events,
+        investigation_state=inv_state,
     )
 
 

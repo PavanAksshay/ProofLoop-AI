@@ -114,6 +114,27 @@ class ServiceSimulator:
             return ToolResult(success=False, message="Service is outside this simulator's scope", error="OUT_OF_SCOPE")
 
         tool = request.tool
+        if tool == "read_logs":
+            window = str(request.arguments.get("window", "5m"))
+            return self.read_logs(request.service, window=window)
+
+        if tool == "read_config":
+            return self.read_config(request.service)
+
+        if tool == "get_metrics":
+            window = str(request.arguments.get("window", "5m"))
+            return self.get_metrics(request.service, window=window)
+
+        if tool == "compare_config":
+            return self.compare_config(request.service)
+
+        if tool == "check_dependencies":
+            return self.check_dependencies(request.service)
+
+        if tool == "validate_transactions":
+            count = int(request.arguments.get("count", 5))
+            return self.validate_transactions(request.service, count=count)
+
         if tool == "rollback_config":
             target = str(request.arguments.get("target_version", ""))
             if target not in self.state.available_config_versions:
@@ -182,6 +203,58 @@ class ServiceSimulator:
             )
 
         return ToolResult(success=False, message=f"Unknown tool: {tool}", error="UNKNOWN_TOOL")
+
+    def compare_config(self, service: str = "checkout-service") -> ToolResult:
+        if service != "checkout-service":
+            return ToolResult(success=False, message="Service is outside this simulator's scope", error="OUT_OF_SCOPE")
+        is_healthy = self.state.config_version == self.state.healthy_config_version
+        diff = "clean" if is_healthy else f"- active: {self.state.config_version}\n+ expected: {self.state.healthy_config_version}"
+        return ToolResult(
+            success=True,
+            message="Configuration comparison completed",
+            result={
+                "service": service,
+                "active_version": self.state.config_version,
+                "healthy_version": self.state.healthy_config_version,
+                "is_matching_healthy": is_healthy,
+                "available_versions": list(self.state.available_config_versions),
+                "diff": diff,
+            },
+        )
+
+    def check_dependencies(self, service: str = "checkout-service") -> ToolResult:
+        if service != "checkout-service":
+            return ToolResult(success=False, message="Service is outside this simulator's scope", error="OUT_OF_SCOPE")
+        pool_exhausted = any("pool exhausted" in line.lower() for line in self.state.logs)
+        db_status = "exhausted" if pool_exhausted else ("healthy" if self.state.dependencies_healthy else "degraded")
+        return ToolResult(
+            success=True,
+            message="Dependency status checked",
+            result={
+                "service": service,
+                "dependencies_healthy": self.state.dependencies_healthy,
+                "database_status": db_status,
+                "process_running": self.state.process_running,
+            },
+        )
+
+    def validate_transactions(self, service: str = "checkout-service", count: int = 5) -> ToolResult:
+        if service != "checkout-service":
+            return ToolResult(success=False, message="Service is outside this simulator's scope", error="OUT_OF_SCOPE")
+        probe = self.checkout_probe(count=count)
+        status = "passing" if probe["failed"] == 0 else "failing"
+        return ToolResult(
+            success=True,
+            message="Transaction validation probe completed",
+            result={
+                "service": service,
+                "requested": probe["requested"],
+                "succeeded": probe["succeeded"],
+                "failed": probe["failed"],
+                "failure_rate": round(probe["failed"] / max(1, count), 4),
+                "status": status,
+            },
+        )
 
     def checkout_probe(self, count: int = 5) -> dict[str, Any]:
         successes = max(0, count - self.state.checkout_failures)

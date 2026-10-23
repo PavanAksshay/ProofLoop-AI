@@ -5,6 +5,9 @@ ALLOWED_TOOLS = {
     "read_logs",
     "read_config",
     "get_metrics",
+    "compare_config",
+    "check_dependencies",
+    "validate_transactions",
     "rollback_config",
     "restart_service",
     "scale_service",
@@ -41,7 +44,18 @@ def evaluate_action(request: ToolRequest, client: str, incident_scope: set[str] 
     if request.tool == "escalate_to_human":
         return PolicyResult(decision=PolicyDecision.ALLOWED, rule_id="POL-ESCALATE", reason="Escalation is a non-mutating safe action.")
 
-    if request.tool in {"read_logs", "read_config", "get_metrics", "rollback_config", "restart_service", "scale_service", "clear_cache"}:
+    if request.tool in {
+        "read_logs",
+        "read_config",
+        "get_metrics",
+        "compare_config",
+        "check_dependencies",
+        "validate_transactions",
+        "rollback_config",
+        "restart_service",
+        "scale_service",
+        "clear_cache",
+    }:
         return PolicyResult(decision=PolicyDecision.ALLOWED, rule_id="POL-DEFAULT-ALLOWLIST", reason="Action is explicitly allowed by the current tool policy.")
 
     return PolicyResult(decision=PolicyDecision.BLOCKED, rule_id="POL-DENY-BY-DEFAULT", reason="No policy explicitly permits this action.")

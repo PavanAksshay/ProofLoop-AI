@@ -20,6 +20,7 @@ from .models import (
     BenchmarkRunRequest,
     IncidentResponse,
     IncidentRunRequest,
+    InvestigationState,
     Outcome,
     TERMINAL_OUTCOMES,
 )
@@ -134,6 +135,20 @@ def read_incident(incident_id: str) -> IncidentResponse:
     if response is None:
         raise HTTPException(status_code=404, detail="Incident not found.")
     return response
+
+
+@app.get("/incidents/{incident_id}/investigation", response_model=InvestigationState)
+def read_investigation(incident_id: str) -> InvestigationState:
+    from .store import get_investigation_state
+    state = get_investigation_state(incident_id)
+    if state is None:
+        incident = get_incident_response(incident_id) or get_incident(incident_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="Incident not found.")
+        if incident.investigation_state:
+            return incident.investigation_state
+        raise HTTPException(status_code=404, detail="Investigation state not found for this incident.")
+    return state
 
 
 @app.get("/incidents/{incident_id}/events")
