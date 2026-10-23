@@ -3,9 +3,11 @@
 Provides explicit, typed, and bounded investigation cycles:
 - Normalizes synthetic service observations into structured EvidenceItems.
 - Tracks and updates ranked root-cause Hypotheses with supporting/contradicting evidence.
-- Selects read-only diagnostic tools that distinguish between competing hypotheses.
+- Selects read-only diagnostic tools that distinguish between competing hypotheses using
+  deterministic Expected Information Value (EIV).
 - Suppresses duplicate diagnostic calls and strictly bounds tool budgets.
-- Recommends remediation only when justified by high-confidence, non-contradicted evidence.
+- Recommends remediation only when justified by corroborated evidence, fulfilled required
+  evidence, resolved contradictions, and cleared competing hypotheses (preventing premature diagnosis).
 - Safely validates LLM suggestions or falls back to deterministic rule-based evaluation.
 """
 from __future__ import annotations
@@ -45,6 +47,15 @@ READ_ONLY_DIAGNOSTIC_TOOLS = {
     "compare_config",
     "check_dependencies",
     "validate_transactions",
+}
+
+CANONICAL_DIAGNOSTIC_ARGS: dict[str, dict[str, Any]] = {
+    "compare_config": {},
+    "validate_transactions": {"count": 5},
+    "check_dependencies": {},
+    "get_metrics": {},
+    "read_logs": {},
+    "read_config": {},
 }
 
 CONFIDENCE_REMEDIATION_THRESHOLD = 0.80
@@ -129,57 +140,87 @@ def normalize_initial_evidence(
 
 
 def generate_initial_hypotheses(symptoms: list[str], evidence: list[EvidenceItem]) -> list[Hypothesis]:
-    """Generate a bounded set of plausible root-cause hypotheses based on observed symptoms."""
-    hypotheses = [
-        Hypothesis(
-            id="hyp-bad-config",
-            title="Faulty Configuration Deployment",
-            description="Active configuration version contains defective parameters, causing service errors.",
-            confidence_score=0.5,
-            suggested_diagnostic="compare_config",
-            suggested_remediation=ToolRequest(
-                tool="rollback_config",
-                service="checkout-service",
-                arguments={"target_version": "v_healthy"},
-            ),
+    """Generate a bounded set of competing plausible root-cause hypotheses based on observed symptoms.
+
+    Maintains a set of competing hypotheses across configuration, observability,
+    dependency, and transient failure categories with testable required evidence.
+    """
+    has_config_symptom = any("config" in s.lower() or "deployment" in s.lower() for s in symptoms)
+    has_false_green_symptom = any("false-green" in s.lower() for s in symptoms)
+
+    hyp_bad_config = Hypothesis(
+        id="hyp-bad-config",
+        title="Faulty Configuration Deployment",
+        description="Active configuration version contains defective parameters, causing service errors.",
+        category="configuration",
+        confidence_score=0.55 if has_config_symptom else 0.45,
+        required_evidence=["diff:active_differs_from_healthy"],
+        applicable_diagnostics=["compare_config", "read_logs"],
+        last_ranking_change_reason="Initial hypothesis generated from deployment/config symptoms.",
+        uncertainty_notes="Awaiting baseline configuration diff verification.",
+        suggested_diagnostic="compare_config",
+        suggested_remediation=ToolRequest(
+            tool="rollback_config",
+            service="checkout-service",
+            arguments={"target_version": "v_healthy"},
         ),
-        Hypothesis(
-            id="hyp-false-green",
-            title="Misleading Health Check / Hidden Failure",
-            description="Service process is running and health endpoint returns 200, but checkout transactions fail.",
-            confidence_score=0.4,
-            suggested_diagnostic="validate_transactions",
-            suggested_remediation=ToolRequest(
-                tool="clear_cache",
-                service="checkout-service",
-                arguments={},
-            ),
+    )
+
+    hyp_false_green = Hypothesis(
+        id="hyp-false-green",
+        title="Misleading Health Check / Hidden Failure",
+        description="Service process is running and health endpoint returns 200, but checkout transactions fail.",
+        category="observability",
+        confidence_score=0.55 if has_false_green_symptom else 0.45,
+        required_evidence=["probe:transaction_failure_observed", "health:endpoint_reports_200"],
+        applicable_diagnostics=["validate_transactions", "get_metrics"],
+        last_ranking_change_reason="Initial hypothesis generated from health endpoint telemetry.",
+        uncertainty_notes="Awaiting synthetic transaction probe execution.",
+        suggested_diagnostic="validate_transactions",
+        suggested_remediation=ToolRequest(
+            tool="clear_cache",
+            service="checkout-service",
+            arguments={},
         ),
-        Hypothesis(
-            id="hyp-dependency-failure",
-            title="Database or Dependency Failure",
-            description="Downstream database connection pool is exhausted or dependency is degraded.",
-            confidence_score=0.3,
-            suggested_diagnostic="check_dependencies",
-            suggested_remediation=ToolRequest(
-                tool="modify_database",
-                service="checkout-service",
-                arguments={"operation": "repair"},
-            ),
+    )
+
+    hyp_dependency = Hypothesis(
+        id="hyp-dependency-failure",
+        title="Database or Dependency Failure",
+        description="Downstream database connection pool is exhausted or dependency is degraded.",
+        category="dependency",
+        confidence_score=0.40,
+        required_evidence=["dep:downstream_database_error"],
+        applicable_diagnostics=["check_dependencies", "read_logs"],
+        last_ranking_change_reason="Initial hypothesis generated to evaluate downstream dependencies.",
+        uncertainty_notes="Awaiting dependency probe check.",
+        suggested_diagnostic="check_dependencies",
+        suggested_remediation=ToolRequest(
+            tool="modify_database",
+            service="checkout-service",
+            arguments={"operation": "repair"},
         ),
-        Hypothesis(
-            id="hyp-transient-spike",
-            title="Transient Resource Contention",
-            description="Temporary request concurrency spike or stale cache causing transient errors.",
-            confidence_score=0.2,
-            suggested_diagnostic="get_metrics",
-            suggested_remediation=ToolRequest(
-                tool="clear_cache",
-                service="checkout-service",
-                arguments={},
-            ),
+    )
+
+    hyp_transient = Hypothesis(
+        id="hyp-transient-spike",
+        title="Transient Resource Contention",
+        description="Temporary request concurrency spike or stale cache causing transient errors.",
+        category="transient",
+        confidence_score=0.30,
+        required_evidence=["metrics:transient_error_spike"],
+        applicable_diagnostics=["get_metrics", "read_logs"],
+        last_ranking_change_reason="Initial hypothesis generated to evaluate transient traffic spikes.",
+        uncertainty_notes="Awaiting telemetry error rate trend analysis.",
+        suggested_diagnostic="get_metrics",
+        suggested_remediation=ToolRequest(
+            tool="clear_cache",
+            service="checkout-service",
+            arguments={},
         ),
-    ]
+    )
+
+    hypotheses = [hyp_bad_config, hyp_false_green, hyp_dependency, hyp_transient]
 
     has_injection = any("untrusted prompt injection" in s.lower() for s in symptoms)
     if has_injection:
@@ -189,7 +230,12 @@ def generate_initial_hypotheses(symptoms: list[str], evidence: list[EvidenceItem
                 id="hyp-hostile-injection",
                 title="Adversarial Prompt Injection in Evidence",
                 description="Malicious input designed to coerce automated tooling into destructive operations.",
-                confidence_score=0.9,
+                category="security",
+                confidence_score=0.95,
+                required_evidence=["logs:prompt_injection_pattern"],
+                applicable_diagnostics=["read_logs"],
+                last_ranking_change_reason="Instruction-like injection pattern isolated in untrusted logs.",
+                uncertainty_notes="Quarantined; automated execution forbidden.",
                 suggested_diagnostic="read_logs",
                 suggested_remediation=ToolRequest(
                     tool="escalate_to_human",
@@ -199,145 +245,402 @@ def generate_initial_hypotheses(symptoms: list[str], evidence: list[EvidenceItem
             ),
         )
 
-    return hypotheses
+    return sorted(hypotheses, key=lambda h: h.confidence_score, reverse=True)
 
 
 def update_hypotheses_with_evidence(
     hypotheses: list[Hypothesis],
     evidence: list[EvidenceItem],
 ) -> list[Hypothesis]:
-    """Deterministically correlate supporting and contradicting evidence for each hypothesis."""
+    """Deterministically correlate supporting and contradicting evidence for each hypothesis.
+
+    Notes on scoring and ranking semantics:
+    - Confidence scores are heuristic ranking indicators, not calibrated Bayesian posterior probabilities.
+    - Contradictory evidence is strictly preserved and never cleared upon refutation.
+    - Evidence items are deduplicated by ID to prevent double-counting.
+    - Required evidence keys must be satisfied for a hypothesis to achieve CONFIRMED status.
+    """
     updated: list[Hypothesis] = []
 
-    for hyp in hypotheses:
-        supporting: list[str] = []
-        contradicting: list[str] = []
+    # Map each evidence item uniquely to avoid duplicate counting
+    unique_evidence_by_id = {ev.id: ev for ev in evidence}
 
-        for ev in evidence:
+    for hyp in hypotheses:
+        supporting_ids: list[str] = []
+        contradicting_ids: list[str] = []
+        satisfied_requirements: set[str] = set()
+
+        for ev_id, ev in unique_evidence_by_id.items():
             data = ev.data
 
-            # 1. Faulty Configuration Evaluation
+            # 1. Faulty Configuration Deployment Evaluation
             if hyp.id == "hyp-bad-config":
                 if ev.source == "diagnostic:compare_config":
                     if not data.get("is_matching_healthy", True):
-                        supporting.append(ev.id)
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("diff:active_differs_from_healthy")
                     else:
-                        contradicting.append(ev.id)
-                elif ev.source == "logs:checkout-service":
+                        contradicting_ids.append(ev_id)
+                elif ev.source in ("logs:checkout-service", "diagnostic:read_logs"):
                     logs_list = data.get("logs", [])
                     if any("v_bad" in line or "config loader: active config v_bad" in line for line in logs_list):
-                        supporting.append(ev.id)
+                        supporting_ids.append(ev_id)
                     elif any("active config v_healthy" in line for line in logs_list):
-                        contradicting.append(ev.id)
+                        contradicting_ids.append(ev_id)
 
-            # 2. False Green Evaluation
+            # 2. False Green / Hidden Transactional Failure Evaluation
             elif hyp.id == "hyp-false-green":
                 if ev.source == "diagnostic:validate_transactions":
                     failed = data.get("failed", 0)
                     if failed > 0:
-                        supporting.append(ev.id)
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("probe:transaction_failure_observed")
                     else:
-                        contradicting.append(ev.id)
+                        contradicting_ids.append(ev_id)
                 elif ev.source == "metrics:checkout-service":
                     if data.get("health_endpoint_status") == 200 and data.get("error_rate", 0.0) > 0.05:
-                        supporting.append(ev.id)
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("health:endpoint_reports_200")
                     elif data.get("health_endpoint_status") != 200:
-                        contradicting.append(ev.id)
-                elif ev.source == "logs:checkout-service":
+                        contradicting_ids.append(ev_id)
+                elif ev.source in ("logs:checkout-service", "diagnostic:read_logs"):
                     logs_list = data.get("logs", [])
                     if any("health endpoint reports ok" in line.lower() or "failing despite healthy" in line.lower() for line in logs_list):
-                        supporting.append(ev.id)
+                        supporting_ids.append(ev_id)
 
-            # 3. Dependency / Database Failure Evaluation
+            # 3. Database or Dependency Failure Evaluation
             elif hyp.id == "hyp-dependency-failure":
                 if ev.source == "diagnostic:check_dependencies":
                     if not data.get("dependencies_healthy", True) or data.get("database_status") == "exhausted":
-                        supporting.append(ev.id)
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("dep:downstream_database_error")
                     else:
-                        contradicting.append(ev.id)
-                elif ev.source == "logs:checkout-service":
-                    if any("connection pool" in line.lower() or "timeout" in line.lower() for line in data.get("logs", [])):
-                        supporting.append(ev.id)
+                        contradicting_ids.append(ev_id)
+                elif ev.source in ("logs:checkout-service", "diagnostic:read_logs"):
+                    logs_list = data.get("logs", [])
+                    if any("connection pool" in line.lower() or "timeout" in line.lower() for line in logs_list):
+                        supporting_ids.append(ev_id)
 
-            # 4. Hostile Injection Evaluation
+            # 4. Hostile Prompt Injection Evaluation
             elif hyp.id == "hyp-hostile-injection":
                 if "inj" in ev.id or "injection" in ev.summary.lower():
-                    supporting.append(ev.id)
+                    supporting_ids.append(ev_id)
+                    satisfied_requirements.add("logs:prompt_injection_pattern")
 
-            # 5. Transient Spike Evaluation
+            # 5. Transient Resource Contention Evaluation
             elif hyp.id == "hyp-transient-spike":
                 if ev.source == "diagnostic:compare_config" and not data.get("is_matching_healthy", True):
-                    contradicting.append(ev.id)
+                    contradicting_ids.append(ev_id)
+                elif ev.source == "diagnostic:validate_transactions":
+                    if data.get("failed", 0) > 0:
+                        contradicting_ids.append(ev_id)
+                    elif data.get("failed", 0) == 0 and data.get("total", 0) > 0:
+                        supporting_ids.append(ev_id)
+                        satisfied_requirements.add("metrics:transient_error_spike")
 
-        # Calculate calibrated confidence score
-        if contradicting:
+        # Deduplicate evidence references to guarantee no repeated counting
+        dedup_supporting = list(dict.fromkeys(supporting_ids))
+        dedup_contradicting = list(dict.fromkeys(contradicting_ids))
+
+        # Preserve any previously recorded contradictory evidence
+        for prev_cid in hyp.contradicting_evidence_ids:
+            if prev_cid not in dedup_contradicting:
+                dedup_contradicting.append(prev_cid)
+
+        # Deterministic heuristic scoring
+        if dedup_contradicting:
             status = HypothesisStatus.REFUTED
             confidence = 0.05
-        elif supporting:
-            # Baseline confidence scaling: increases with corroborating independent sources
-            distinct_sources = len({ev.source for ev in evidence if ev.id in supporting})
-            confidence = min(0.98, 0.45 + (distinct_sources * 0.25))
-            status = HypothesisStatus.CONFIRMED if confidence >= CONFIDENCE_REMEDIATION_THRESHOLD else HypothesisStatus.ACTIVE
+            contra_sources = sorted({
+                unique_evidence_by_id[cid].source
+                for cid in dedup_contradicting
+                if cid in unique_evidence_by_id
+            })
+            reason = f"Refuted by contradictory evidence from {', '.join(contra_sources)}."
+            uncertainty = "Refuted by diagnostic evidence; contradictory evidence preserved."
+        elif dedup_supporting:
+            distinct_sources = len({
+                unique_evidence_by_id[sid].source
+                for sid in dedup_supporting
+                if sid in unique_evidence_by_id
+            })
+            all_reqs_met = all(r in satisfied_requirements for r in hyp.required_evidence) if hyp.required_evidence else True
+
+            if all_reqs_met:
+                confidence = min(0.98, 0.45 + (distinct_sources * 0.25))
+            else:
+                # Cap heuristic confidence score at 0.70 when required evidence remains unfulfilled
+                confidence = min(0.70, 0.35 + (distinct_sources * 0.15))
+
+            if confidence >= CONFIDENCE_REMEDIATION_THRESHOLD and all_reqs_met:
+                status = HypothesisStatus.CONFIRMED
+                reason = f"Promoted to CONFIRMED ({round(confidence * 100)}%): all required evidence satisfied across {distinct_sources} distinct sources."
+                uncertainty = None
+            else:
+                status = HypothesisStatus.ACTIVE
+                missing_reqs = [r for r in hyp.required_evidence if r not in satisfied_requirements]
+                missing_str = f"Missing mandatory evidence: {', '.join(missing_reqs)}." if missing_reqs else "Pending corroborating diagnostic."
+                reason = f"Confidence adjusted to {round(confidence * 100)}% based on {len(dedup_supporting)} items from {distinct_sources} source(s)."
+                uncertainty = missing_str
         else:
             status = HypothesisStatus.ACTIVE
-            confidence = 0.2
+            confidence = min(hyp.confidence_score, 0.30)
+            reason = hyp.last_ranking_change_reason or "Baseline prior pending diagnostic testing."
+            uncertainty = f"Pending diagnostic testing ({', '.join(hyp.applicable_diagnostics)})."
 
         updated.append(
             hyp.model_copy(
                 update={
-                    "supporting_evidence_ids": supporting,
-                    "contradicting_evidence_ids": contradicting,
+                    "supporting_evidence_ids": dedup_supporting,
+                    "contradicting_evidence_ids": dedup_contradicting,
                     "confidence_score": round(confidence, 3),
                     "status": status,
+                    "last_ranking_change_reason": reason,
+                    "uncertainty_notes": uncertainty,
                 }
             )
         )
 
-    # Sort hypotheses by confidence descending
-    return sorted(updated, key=lambda h: h.confidence_score, reverse=True)
+    # Deterministic sorting: CONFIRMED > ACTIVE > INCONCLUSIVE > REFUTED; then by confidence descending
+    status_order = {
+        HypothesisStatus.CONFIRMED: 0,
+        HypothesisStatus.ACTIVE: 1,
+        HypothesisStatus.INCONCLUSIVE: 2,
+        HypothesisStatus.REFUTED: 3,
+    }
+    return sorted(
+        updated,
+        key=lambda h: (status_order.get(h.status, 2), -h.confidence_score, h.id),
+    )
+
+
+def calculate_diagnostic_eiv(
+    tool: str,
+    arguments: dict[str, Any],
+    state: InvestigationState,
+) -> tuple[float, str, list[str]]:
+    """Calculate the deterministic Expected Information Value (EIV) for running a diagnostic tool.
+
+    Mathematical and heuristic principles:
+    1. Distinguishing Power (DP in [0.0, 1.0]):
+       Evaluates whether the candidate tool tests the top competing hypotheses.
+       - If tool tests both the top leader H1 and competitor H2 (or directly impacts them): DP = 0.95.
+       - If tool tests the leader H1 specifically: DP = 0.75.
+       - If tool tests the competitor H2 specifically: DP = 0.70.
+       - If tool tests lower-ranked active hypotheses: DP = 0.40.
+       - If tool does not test any active hypothesis: DP = 0.10.
+    2. Uncertainty Reduction (UR in [0.0, 1.0]):
+       Uncertainty is highest when the top 2 active hypotheses have close confidence scores:
+       UR = max(0.0, 1.0 - abs(c1 - c2)).
+       If UR is high and the tool addresses H1 or H2, resolving the ambiguity has high value.
+    3. Duplicate Suppression & Inconclusiveness:
+       - If tool already succeeded and produced conclusive diagnostic data: EIV = 0.0 (suppressed).
+       - If tool was previously inconclusive (empty result or error) and budget permits, a penalty is applied but not full suppression.
+    4. Execution Cost:
+       Nominal read-only invocation cost (0.05) subtracted to bound unnecessary steps.
+    5. Net Score:
+       EIV = round(max(0.0, 0.45 * DP + 0.35 * (UR * relevance) + 0.20 * relevance - 0.05), 3)
+    """
+    already_run = [d for d in state.diagnostics_performed if d.tool == tool]
+    if already_run:
+        # Check if previous execution yielded conclusive data
+        has_conclusive_run = any(d.success and bool(d.data) for d in already_run)
+        if has_conclusive_run:
+            return 0.0, f"Duplicate suppressed: diagnostic '{tool}' already executed with conclusive result.", []
+
+    # Identify top active (non-refuted) hypotheses
+    active_hyps = [h for h in state.hypotheses if h.status != HypothesisStatus.REFUTED]
+    if not active_hyps:
+        return 0.0, "No active hypotheses remain to investigate.", []
+
+    h1 = active_hyps[0]
+    h2 = active_hyps[1] if len(active_hyps) > 1 else None
+
+    # Relevance and Distinguishing Power
+    tests_h1 = tool in h1.applicable_diagnostics or tool == h1.suggested_diagnostic
+    tests_h2 = bool(h2 and (tool in h2.applicable_diagnostics or tool == h2.suggested_diagnostic))
+    targeted = [h.id for h in active_hyps if tool in h.applicable_diagnostics or tool == h.suggested_diagnostic]
+
+    if tests_h1 and tests_h2:
+        dp = 0.95
+        relevance = 1.0
+        dp_explanation = f"Directly distinguishes top competitors: '{h1.title}' vs '{h2.title}'"
+    elif tests_h1:
+        dp = 0.75
+        relevance = 1.0
+        dp_explanation = f"Tests leading hypothesis '{h1.title}'"
+    elif tests_h2:
+        dp = 0.70
+        relevance = 0.9
+        dp_explanation = f"Tests primary competing hypothesis '{h2.title}'"
+    elif targeted:
+        dp = 0.40
+        relevance = 0.4
+        dp_explanation = f"Tests secondary hypothesis '{targeted[0]}'"
+    else:
+        dp = 0.10
+        relevance = 0.1
+        dp_explanation = f"Low relevance to current active hypotheses"
+
+    # Uncertainty Reduction
+    if h2:
+        score_gap = abs(h1.confidence_score - h2.confidence_score)
+        ur = max(0.0, 1.0 - score_gap)
+    else:
+        ur = 0.2
+
+    # Inconclusive retry penalty
+    penalty = 0.25 if already_run else 0.0
+
+    raw_eiv = (0.45 * dp) + (0.35 * (ur * relevance)) + (0.20 * relevance) - 0.05 - penalty
+    eiv = round(max(0.0, min(1.0, raw_eiv)), 3)
+
+    return eiv, dp_explanation, targeted
 
 
 def select_next_diagnostic(state: InvestigationState) -> DiagnosticProposal | None:
-    """Select a read-only diagnostic tool that distinguishes between competing hypotheses.
+    """Select the read-only diagnostic tool with maximum Expected Information Value (EIV).
 
-    Suppresses duplicate diagnostic calls if already executed.
+    Evaluates candidate tools against competing hypotheses, prioritizing tools that
+    discriminate between closely ranked plausible root causes.
     """
-    already_run = {d.tool for d in state.diagnostics_performed if d.success}
+    candidate_proposals: list[DiagnosticProposal] = []
 
-    for hyp in state.hypotheses:
-        if hyp.status == HypothesisStatus.REFUTED:
-            continue
-
-        tool = hyp.suggested_diagnostic
-        if not tool or tool not in READ_ONLY_DIAGNOSTIC_TOOLS or tool in already_run:
+    for tool in sorted(READ_ONLY_DIAGNOSTIC_TOOLS):
+        canonical_args = CANONICAL_DIAGNOSTIC_ARGS.get(tool, {})
+        eiv, dp_expl, targeted = calculate_diagnostic_eiv(tool, canonical_args, state)
+        if eiv <= 0.0:
             continue
 
         if tool == "compare_config":
-            return DiagnosticProposal(
-                tool="compare_config",
-                service="checkout-service",
-                arguments={},
-                rationale="Compare active configuration against known healthy baseline to confirm or refute bad configuration.",
-                target_hypotheses=[hyp.id, "hyp-bad-config"],
+            rationale = (
+                f"Compare active configuration against known healthy baseline. "
+                f"EIV: {eiv} ({dp_expl})."
             )
-        if tool == "validate_transactions":
-            return DiagnosticProposal(
-                tool="validate_transactions",
-                service="checkout-service",
-                arguments={"count": 5},
-                rationale="Execute synthetic checkout transaction probes to determine if business logic is broken despite health check status.",
-                target_hypotheses=[hyp.id, "hyp-false-green"],
+        elif tool == "validate_transactions":
+            rationale = (
+                f"Execute synthetic checkout transaction probes to determine if business logic fails. "
+                f"EIV: {eiv} ({dp_expl})."
             )
-        if tool == "check_dependencies":
-            return DiagnosticProposal(
-                tool="check_dependencies",
-                service="checkout-service",
-                arguments={},
-                rationale="Inspect database connection pool and downstream dependency health to confirm or refute dependency failure.",
-                target_hypotheses=[hyp.id, "hyp-dependency-failure"],
+        elif tool == "check_dependencies":
+            rationale = (
+                f"Inspect database connection pool and downstream dependency health. "
+                f"EIV: {eiv} ({dp_expl})."
             )
+        elif tool == "get_metrics":
+            rationale = (
+                f"Query real-time service metrics to analyze error rates and health status. "
+                f"EIV: {eiv} ({dp_expl})."
+            )
+        elif tool == "read_logs":
+            rationale = (
+                f"Read latest diagnostic log entries for checkout-service. "
+                f"EIV: {eiv} ({dp_expl})."
+            )
+        else:
+            rationale = f"Run read-only diagnostic tool '{tool}'. EIV: {eiv} ({dp_expl})."
 
-    return None
+        candidate_proposals.append(
+            DiagnosticProposal(
+                tool=tool,
+                service="checkout-service",
+                arguments=canonical_args,
+                rationale=rationale,
+                target_hypotheses=targeted,
+                expected_information_value=eiv,
+                distinguishing_power=dp_expl,
+            )
+        )
+
+    if not candidate_proposals:
+        return None
+
+    # Deterministically select proposal with highest EIV
+    candidate_proposals.sort(key=lambda p: (p.expected_information_value, p.tool), reverse=True)
+    return candidate_proposals[0]
+
+
+def is_diagnosis_sufficient(state: InvestigationState) -> tuple[bool, str]:
+    """Deterministically determine if evidence is sufficient for automated remediation.
+
+    A diagnosis is NOT sufficient merely because confidence >= 0.8. It strictly requires:
+    1. A leading hypothesis exists with status CONFIRMED and confidence >= 0.80.
+    2. Zero unresolved contradictory evidence items on the leading hypothesis.
+    3. All required evidence items for the leading hypothesis are satisfied.
+    4. Active competing hypotheses are either refuted or separated by a confidence gap >= 0.35,
+       OR all discriminating diagnostics within budget have been exhausted.
+    5. Evidence freshness: cannot diagnose solely from initial symptoms or stale metrics without
+       at least one direct diagnostic result (except hostile prompt injection).
+    """
+    if not state.hypotheses:
+        return False, "No hypotheses initialized."
+
+    leading = state.hypotheses[0]
+
+    # 1. Hostile injection immediate safety handling
+    if leading.id == "hyp-hostile-injection" and leading.status == HypothesisStatus.CONFIRMED:
+        return True, "Hostile prompt injection verified; automated remediation prohibited."
+
+    # 2. Confidence threshold
+    if leading.status != HypothesisStatus.CONFIRMED or leading.confidence_score < CONFIDENCE_REMEDIATION_THRESHOLD:
+        return False, (
+            f"Leading hypothesis '{leading.title}' has not achieved confirmation threshold "
+            f"({round(leading.confidence_score * 100)}% < {round(CONFIDENCE_REMEDIATION_THRESHOLD * 100)}%)."
+        )
+
+    # 3. Contradictory evidence
+    if leading.contradicting_evidence_ids:
+        return False, (
+            f"Leading hypothesis '{leading.title}' has {len(leading.contradicting_evidence_ids)} "
+            "unresolved contradictory evidence item(s)."
+        )
+
+    # 4. Required evidence completeness
+    if leading.required_evidence:
+        satisfied = set()
+        for ev in state.evidence:
+            if ev.id in leading.supporting_evidence_ids:
+                if leading.id == "hyp-bad-config" and ev.source == "diagnostic:compare_config" and not ev.data.get("is_matching_healthy", True):
+                    satisfied.add("diff:active_differs_from_healthy")
+                elif leading.id == "hyp-false-green":
+                    if ev.source == "diagnostic:validate_transactions" and ev.data.get("failed", 0) > 0:
+                        satisfied.add("probe:transaction_failure_observed")
+                    if ev.source == "metrics:checkout-service" and ev.data.get("health_endpoint_status") == 200:
+                        satisfied.add("health:endpoint_reports_200")
+                elif leading.id == "hyp-dependency-failure" and ev.source == "diagnostic:check_dependencies":
+                    if not ev.data.get("dependencies_healthy", True) or ev.data.get("database_status") == "exhausted":
+                        satisfied.add("dep:downstream_database_error")
+                elif leading.id == "hyp-transient-spike" and ev.source == "metrics:checkout-service":
+                    if ev.data.get("error_rate", 0.0) > 0.05:
+                        satisfied.add("metrics:transient_error_spike")
+
+        missing = [req for req in leading.required_evidence if req not in satisfied]
+        if missing:
+            return False, f"Leading hypothesis '{leading.title}' is missing mandatory evidence: {', '.join(missing)}."
+
+    # 5. Plausible competing hypotheses
+    active_competitors = [h for h in state.hypotheses[1:] if h.status == HypothesisStatus.ACTIVE]
+    already_run = {d.tool for d in state.diagnostics_performed if d.success}
+    for comp in active_competitors:
+        gap = leading.confidence_score - comp.confidence_score
+        if gap < 0.35:
+            # Competitor is close. Is there an unexecuted diagnostic capable of testing it?
+            available_comp_diags = [
+                d for d in comp.applicable_diagnostics
+                if d in READ_ONLY_DIAGNOSTIC_TOOLS and d not in already_run
+            ]
+            if available_comp_diags and state.budget.diagnostics_run < state.budget.max_diagnostics:
+                return False, (
+                    f"Competing hypothesis '{comp.title}' remains plausible (score {round(comp.confidence_score * 100)}%, "
+                    f"gap {round(gap * 100)}%) and can be distinguished by diagnostic '{available_comp_diags[0]}'."
+                )
+
+    # 6. Freshness / Diagnostic verification check
+    diagnostic_evidence = [ev for ev in state.evidence if ev.kind == EvidenceKind.DIAGNOSTIC_RESULT]
+    if not diagnostic_evidence:
+        return False, "Premature diagnosis prevented: no diagnostic tool has been executed to verify symptoms."
+
+    return True, f"Diagnosis '{leading.title}' sufficiently supported by evidence with all competing hypotheses resolved."
 
 
 def execute_diagnostic_tool(
@@ -363,7 +666,11 @@ def execute_diagnostic_tool(
         )
         return result, evidence
 
-    req = ToolRequest(tool=proposal.tool, service=proposal.service, arguments=proposal.arguments)
+    # Normalize arguments to canonical schema to eliminate superficial variations
+    canonical_args = CANONICAL_DIAGNOSTIC_ARGS.get(proposal.tool, {})
+    merged_args = {**canonical_args, **proposal.arguments}
+
+    req = ToolRequest(tool=proposal.tool, service=proposal.service, arguments=merged_args)
     before_state = simulator.snapshot()
     tool_res = simulator.execute(req)
 
@@ -374,7 +681,7 @@ def execute_diagnostic_tool(
     diag_result = DiagnosticResult(
         tool=proposal.tool,
         service=proposal.service,
-        arguments=proposal.arguments,
+        arguments=merged_args,
         success=tool_res.success,
         data=tool_res.result,
         error=tool_res.error,
@@ -413,10 +720,14 @@ def consult_llm_investigator(
         {
             "id": h.id,
             "title": h.title,
+            "category": h.category,
             "confidence": h.confidence_score,
             "status": h.status.value,
             "supporting_evidence": h.supporting_evidence_ids,
             "contradicting_evidence": h.contradicting_evidence_ids,
+            "required_evidence": h.required_evidence,
+            "last_ranking_change_reason": h.last_ranking_change_reason,
+            "uncertainty_notes": h.uncertainty_notes,
         }
         for h in state.hypotheses
     ]
@@ -473,8 +784,11 @@ def run_investigation_cycle(
     # 1. Update hypothesis rankings with all accumulated evidence
     state.hypotheses = update_hypotheses_with_evidence(state.hypotheses, state.evidence)
 
-    # 2. Check for hostile injection override
-    injection_hyp = next((h for h in state.hypotheses if h.id == "hyp-hostile-injection" and h.status == HypothesisStatus.CONFIRMED), None)
+    # 2. Check for hostile injection override (immediate deterministic containment)
+    injection_hyp = next(
+        (h for h in state.hypotheses if h.id == "hyp-hostile-injection" and h.status == HypothesisStatus.CONFIRMED),
+        None,
+    )
     if injection_hyp:
         state.current_diagnosis = DiagnosisUpdate(
             diagnosis="Adversarial prompt injection detected in telemetry evidence.",
@@ -486,7 +800,7 @@ def run_investigation_cycle(
         escalation_tool = ToolRequest(
             tool="escalate_to_human",
             service="checkout-service",
-            arguments={"reason": "Hostile log content quarantined; automated remediation prohibited"},
+            arguments={"reason": "Hostile prompt injection quarantined; automated action restricted"},
         )
         return state, escalation_tool, "Untrusted instruction detected in log stream; safety policy requires human escalation."
 
@@ -506,13 +820,14 @@ def run_investigation_cycle(
         )
         return state, escalation_tool, f"Investigation budget exhausted ({state.budget.steps_taken} steps); safe escalation triggered."
 
-    # 4. Check if leading hypothesis has achieved definitive confirmation
-    leading_hyp = state.hypotheses[0] if state.hypotheses else None
-    if leading_hyp and leading_hyp.confidence_score >= CONFIDENCE_REMEDIATION_THRESHOLD and not leading_hyp.contradicting_evidence_ids:
+    # 4. Check if diagnosis is sufficient for remediation (preventing premature diagnosis)
+    sufficient, sufficiency_reason = is_diagnosis_sufficient(state)
+    if sufficient:
+        leading_hyp = state.hypotheses[0]
         state.current_diagnosis = DiagnosisUpdate(
             diagnosis=f"{leading_hyp.title}: {leading_hyp.description}",
             confidence=leading_hyp.confidence_score,
-            confidence_basis=f"Corroborated by {len(leading_hyp.supporting_evidence_ids)} independent evidence items with zero contradictions.",
+            confidence_basis=f"Corroborated by {len(leading_hyp.supporting_evidence_ids)} independent evidence items: {sufficiency_reason}",
             leading_hypothesis_id=leading_hyp.id,
             unresolved_uncertainties=[],
         )
@@ -528,7 +843,7 @@ def run_investigation_cycle(
         state.proposed_next_step = remediation
         return state, remediation, rationale
 
-    # 5. Otherwise, select the next distinguishing read-only diagnostic tool
+    # 5. Otherwise, select the next distinguishing read-only diagnostic tool via EIV
     # Check LLM consultation first if available
     llm_advice = consult_llm_investigator(state)
     diagnostic_proposal: DiagnosticProposal | None = None
@@ -536,13 +851,17 @@ def run_investigation_cycle(
     if llm_advice and llm_advice.action_type == "diagnostic" and llm_advice.tool in READ_ONLY_DIAGNOSTIC_TOOLS:
         already_run = {d.tool for d in state.diagnostics_performed if d.success}
         if llm_advice.tool not in already_run:
-            diagnostic_proposal = DiagnosticProposal(
-                tool=llm_advice.tool,
-                service=llm_advice.service,
-                arguments=llm_advice.arguments,
-                rationale=llm_advice.rationale,
-                target_hypotheses=llm_advice.target_hypotheses,
-            )
+            eiv, dp_expl, targeted = calculate_diagnostic_eiv(llm_advice.tool, llm_advice.arguments, state)
+            if eiv > 0.0:
+                diagnostic_proposal = DiagnosticProposal(
+                    tool=llm_advice.tool,
+                    service=llm_advice.service,
+                    arguments=CANONICAL_DIAGNOSTIC_ARGS.get(llm_advice.tool, llm_advice.arguments),
+                    rationale=llm_advice.rationale,
+                    target_hypotheses=targeted or llm_advice.target_hypotheses,
+                    expected_information_value=eiv,
+                    distinguishing_power=dp_expl,
+                )
 
     if not diagnostic_proposal:
         diagnostic_proposal = select_next_diagnostic(state)
@@ -558,8 +877,9 @@ def run_investigation_cycle(
         state.hypotheses = update_hypotheses_with_evidence(state.hypotheses, state.evidence)
 
         # Check if new evidence successfully resolved the diagnosis
-        new_leading = state.hypotheses[0] if state.hypotheses else None
-        if new_leading and new_leading.confidence_score >= CONFIDENCE_REMEDIATION_THRESHOLD and not new_leading.contradicting_evidence_ids:
+        post_sufficient, post_reason = is_diagnosis_sufficient(state)
+        if post_sufficient:
+            new_leading = state.hypotheses[0]
             state.current_diagnosis = DiagnosisUpdate(
                 diagnosis=f"{new_leading.title}: {new_leading.description}",
                 confidence=new_leading.confidence_score,
@@ -580,17 +900,17 @@ def run_investigation_cycle(
 
         # If not yet confirmed, record uncertainties
         state.outstanding_uncertainties = [
-            f"Competing hypotheses unresolved: {h.title} ({round(h.confidence_score * 100)}%)"
+            f"Competing hypothesis unresolved: {h.title} ({round(h.confidence_score * 100)}%) - {h.uncertainty_notes or 'Pending testing'}"
             for h in state.hypotheses[:2]
         ]
-        return state, None, f"Diagnostic '{diagnostic_proposal.tool}' completed; evidence accumulated."
+        return state, None, f"Diagnostic '{diagnostic_proposal.tool}' completed (EIV: {diagnostic_proposal.expected_information_value}); evidence accumulated."
 
     # 6. If no more diagnostics can be selected and no hypothesis is proven: safe escalation
     state.termination_reason = "insufficient_evidence_escalation"
     state.current_diagnosis = DiagnosisUpdate(
         diagnosis="Inconclusive root cause.",
         confidence=0.4,
-        confidence_basis="All available read-only diagnostics executed without meeting confirmation threshold.",
+        confidence_basis=f"Available diagnostics exhausted without satisfying confirmation requirements: {sufficiency_reason}",
         unresolved_uncertainties=state.outstanding_uncertainties or ["No safe remediation proven."],
     )
     escalate_tool = ToolRequest(

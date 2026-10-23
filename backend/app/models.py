@@ -142,10 +142,15 @@ class Hypothesis(BaseModel):
     id: str
     title: str
     description: str
+    category: str = "general"
     confidence_score: float = Field(default=0.5, ge=0.0, le=1.0)
     supporting_evidence_ids: list[str] = Field(default_factory=list)
     contradicting_evidence_ids: list[str] = Field(default_factory=list)
     status: HypothesisStatus = HypothesisStatus.ACTIVE
+    required_evidence: list[str] = Field(default_factory=list)
+    applicable_diagnostics: list[str] = Field(default_factory=list)
+    last_ranking_change_reason: str | None = None
+    uncertainty_notes: str | None = None
     suggested_diagnostic: str | None = None
     suggested_remediation: ToolRequest | None = None
 
@@ -156,6 +161,8 @@ class DiagnosticProposal(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     rationale: str
     target_hypotheses: list[str] = Field(default_factory=list)
+    expected_information_value: float = Field(default=0.5, ge=0.0, le=1.0)
+    distinguishing_power: str = ""
 
 
 class DiagnosticResult(BaseModel):
@@ -192,6 +199,9 @@ class InvestigationBudget(BaseModel):
     steps_taken: int = 0
     diagnostics_run: int = 0
     remediations_attempted: int = 0
+    remediations_proposed: int = 0
+    remediations_blocked: int = 0
+    remediations_pending_approval: int = 0
 
 
 class InvestigationState(BaseModel):

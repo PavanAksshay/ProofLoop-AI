@@ -10,6 +10,7 @@ from .llm_investigator import propose_action as _default_propose_action
 from .models import (
     Actor,
     ApprovalDecisionRequest,
+    DiagnosticProposal,
     Event,
     EvidenceItem,
     EvidenceKind,
@@ -195,6 +196,16 @@ def run_incident(
     # Emit initial structured evidence items
     for ev in inv_state.evidence:
         emit("evidence_observed", Actor.TOOL, ev.model_dump(), [ev.source])
+        supp_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.supporting_evidence_ids]
+        contra_hyps = [h.id for h in inv_state.hypotheses if ev.id in h.contradicting_evidence_ids]
+        if supp_hyps or contra_hyps:
+            emit("evidence_correlated", Actor.AGENT, {
+                "evidence_id": ev.id,
+                "source": ev.source,
+                "kind": ev.kind.value,
+                "supporting_hypotheses": supp_hyps,
+                "contradicting_hypotheses": contra_hyps,
+            }, [ev.source])
 
     # Backward-compatible evidence_collected event for existing UI/contracts
     logs = simulator.read_logs("checkout-service").result.get("logs", [])
@@ -250,11 +261,19 @@ def run_incident(
             if len(inv_state.diagnostics_performed) > prev_diag_count:
                 latest_diag = inv_state.diagnostics_performed[-1]
                 latest_ev = inv_state.evidence[-1]
+                latest_prop = inv_state.proposed_next_step if isinstance(inv_state.proposed_next_step, DiagnosticProposal) else None
+                eiv = latest_prop.expected_information_value if latest_prop else 0.5
+                dist_power = latest_prop.distinguishing_power if latest_prop else ""
+                target_hyps = latest_prop.target_hypotheses if latest_prop else []
+
                 emit("diagnostic_selected", Actor.AGENT, {
                     "tool": latest_diag.tool,
                     "service": latest_diag.service,
                     "arguments": latest_diag.arguments,
-                    "rationale": "Selected to distinguish competing root-cause hypotheses.",
+                    "rationale": latest_prop.rationale if latest_prop else "Selected to distinguish competing root-cause hypotheses.",
+                    "target_hypotheses": target_hyps,
+                    "expected_information_value": eiv,
+                    "distinguishing_power": dist_power,
                 })
                 emit("diagnostic_started", Actor.AGENT, {
                     "tool": latest_diag.tool,
@@ -267,6 +286,17 @@ def run_incident(
                     "error": latest_diag.error,
                 })
                 emit("evidence_observed", Actor.TOOL, latest_ev.model_dump(), [latest_ev.source])
+
+                # Correlate diagnostic evidence with hypotheses
+                supp_hyps = [h.id for h in inv_state.hypotheses if latest_ev.id in h.supporting_evidence_ids]
+                contra_hyps = [h.id for h in inv_state.hypotheses if latest_ev.id in h.contradicting_evidence_ids]
+                emit("evidence_correlated", Actor.AGENT, {
+                    "evidence_id": latest_ev.id,
+                    "source": latest_ev.source,
+                    "kind": latest_ev.kind.value,
+                    "supporting_hypotheses": supp_hyps,
+                    "contradicting_hypotheses": contra_hyps,
+                }, [latest_ev.source])
 
             # Emit updated hypotheses
             emit("hypothesis_updated", Actor.AGENT, {
@@ -302,6 +332,9 @@ def run_incident(
             break
 
         # Emit remediation proposal events
+        if action.tool in REMEDIATION_TOOLS:
+            inv_state.budget.remediations_proposed += 1
+
         emit("remediation_proposed", Actor.AGENT, {
             "attempt": action_attempts + 1,
             "tool": action.tool,
@@ -325,11 +358,15 @@ def run_incident(
         emit("policy_decision", Actor.GATE, decision.model_dump(mode="json"), evidence_refs)
 
         if decision.decision == PolicyDecision.BLOCKED:
+            if action.tool in REMEDIATION_TOOLS:
+                inv_state.budget.remediations_blocked += 1
             outcome = Outcome.BLOCKED
             summary = f"Action blocked by policy: {decision.reason}"
             break
 
         if decision.decision == PolicyDecision.APPROVAL_REQUIRED:
+            if action.tool in REMEDIATION_TOOLS:
+                inv_state.budget.remediations_pending_approval += 1
             # Defensive check: no simulator mutation before human approval
             before = simulator.snapshot()
             emit("approval_requested", Actor.SYSTEM, {
@@ -501,6 +538,9 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
 
         current_policy = evaluate_action(pending.action, pending.client)
         if current_policy.decision == PolicyDecision.BLOCKED:
+            if pending.action.tool in REMEDIATION_TOOLS and pending.investigation_state is not None:
+                pending.investigation_state.budget.remediations_blocked += 1
+                save_investigation_state(incident_id, pending.investigation_state)
             _emit(pending.events, incident_id, "approval_rejected_by_policy", Actor.GATE, {
                 "decision": current_policy.decision.value,
                 "rule_id": current_policy.rule_id,
@@ -538,6 +578,10 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
             resolve_pending_approval(incident_id)
             _pending_approvals.pop(incident_id, None)
             return response
+
+        if pending.action.tool in REMEDIATION_TOOLS and pending.investigation_state is not None:
+            pending.investigation_state.budget.remediations_attempted += 1
+            save_investigation_state(incident_id, pending.investigation_state)
 
         result = pending.simulator.execute(pending.action)
         _emit(pending.events, incident_id, "tool_executed", Actor.TOOL, {
