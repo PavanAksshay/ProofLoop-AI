@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import threading
 from uuid import uuid4
 
 from .investigation import (
@@ -73,6 +74,7 @@ class PendingApproval:
 # Prototype-only process memory. Restarting the server clears pending approvals.
 _pending_approvals: dict[str, PendingApproval] = {}
 _completed_incidents: dict[str, IncidentResponse] = {}
+_approval_lock = threading.Lock()
 
 
 def _response(
@@ -481,48 +483,51 @@ def run_incident(
 
 
 def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> IncidentResponse:
-    pending = _pending_approvals.get(incident_id)
+    # Replay protection: Check if incident has already reached a final outcome
+    existing = _completed_incidents.get(incident_id) or get_incident_response(incident_id)
+    if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
+        raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
 
-    if pending is None:
-        saved = get_pending_approval(incident_id)
-        if saved is None:
-            existing = get_incident_response(incident_id)
-            if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
+    with _approval_lock:
+        pending = _pending_approvals.get(incident_id)
+
+        if pending is None:
+            saved = get_pending_approval(incident_id)
+            if saved is None:
+                if existing is not None and existing.outcome == Outcome.PENDING_APPROVAL:
+                    raise ValueError("This approval is already being processed or has an invalid pending state.")
+                raise KeyError("No pending approval exists for this incident.")
+            try:
+                simulator = ServiceSimulator.from_snapshot(saved["scenario"], saved["simulator_snapshot"])
+                action = ToolRequest.model_validate(saved["action"])
+                stored_response = get_incident_response(incident_id)
+                if stored_response is None:
+                    raise ValueError("Persisted incident history is missing.")
+                inv_state = get_investigation_state(incident_id)
+                pending = PendingApproval(
+                    incident_id=incident_id,
+                    scenario=saved["scenario"],
+                    client=saved["client"],
+                    simulator=simulator,
+                    events=stored_response.events,
+                    action=action,
+                    attempt=int(saved["attempt"]),
+                    rule_id=saved["rule_id"],
+                    reason=saved["reason"],
+                    mode=saved.get("mode", "fallback"),
+                    investigation_state=inv_state,
+                )
+                _pending_approvals[incident_id] = pending
+            except Exception as exc:
+                raise ValueError("Persisted approval state could not be restored safely.") from exc
+
+        claimed = claim_pending_approval(incident_id)
+        if claimed is None:
+            _pending_approvals.pop(incident_id, None)
+            existing_after = get_incident_response(incident_id)
+            if existing_after is not None and existing_after.outcome != Outcome.PENDING_APPROVAL:
                 raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
-            if existing is not None and existing.outcome == Outcome.PENDING_APPROVAL:
-                raise ValueError("This approval is already being processed or has an invalid pending state.")
-            raise KeyError("No pending approval exists for this incident.")
-        try:
-            simulator = ServiceSimulator.from_snapshot(saved["scenario"], saved["simulator_snapshot"])
-            action = ToolRequest.model_validate(saved["action"])
-            stored_response = get_incident_response(incident_id)
-            if stored_response is None:
-                raise ValueError("Persisted incident history is missing.")
-            inv_state = get_investigation_state(incident_id)
-            pending = PendingApproval(
-                incident_id=incident_id,
-                scenario=saved["scenario"],
-                client=saved["client"],
-                simulator=simulator,
-                events=stored_response.events,
-                action=action,
-                attempt=int(saved["attempt"]),
-                rule_id=saved["rule_id"],
-                reason=saved["reason"],
-                mode=saved.get("mode", "fallback"),
-                investigation_state=inv_state,
-            )
-            _pending_approvals[incident_id] = pending
-        except Exception as exc:
-            raise ValueError("Persisted approval state could not be restored safely.") from exc
-
-    claimed = claim_pending_approval(incident_id)
-    if claimed is None:
-        _pending_approvals.pop(incident_id, None)
-        existing = get_incident_response(incident_id)
-        if existing is not None and existing.outcome != Outcome.PENDING_APPROVAL:
-            raise ValueError("This incident has already reached a final outcome; approval cannot be changed.")
-        raise ValueError("This approval is already being processed or has already been resolved.")
+            raise ValueError("This approval is already being processed or has already been resolved.")
 
     try:
         pending.simulator = ServiceSimulator.from_snapshot(
@@ -569,6 +574,9 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
         })
 
         if request.decision == "deny":
+            if pending.action.tool in REMEDIATION_TOOLS and pending.investigation_state is not None:
+                pending.investigation_state.budget.remediations_blocked += 1
+                save_investigation_state(incident_id, pending.investigation_state)
             summary = "The proposed action was denied by a human; no action was executed."
             _emit(pending.events, incident_id, "outcome", Actor.SYSTEM, {"outcome": Outcome.BLOCKED.value, "summary": summary})
             response = _response(
@@ -594,6 +602,19 @@ def decide_approval(incident_id: str, request: ApprovalDecisionRequest) -> Incid
             "approved_by": request.approver_id,
         })
         _pending_approvals.pop(incident_id, None)
+
+        # Record in remediation history
+        if pending.investigation_state is not None:
+            pending.investigation_state.remediation_history.append(
+                RemediationRecord(
+                    tool=pending.action.tool,
+                    service=pending.action.service,
+                    arguments=pending.action.arguments,
+                    attempt=pending.attempt,
+                    success=result.success,
+                )
+            )
+            save_investigation_state(incident_id, pending.investigation_state)
 
         if not result.success:
             summary = "The approved action failed to execute; the incident was escalated."

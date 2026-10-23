@@ -83,6 +83,14 @@ class ApprovalDecisionRequest(BaseModel):
             raise ValueError("decision must be 'approve' or 'deny'")
         return normalized
 
+    @field_validator("approver_id")
+    @classmethod
+    def validate_approver_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("approver_id cannot be blank or whitespace only")
+        return cleaned
+
 
 class ToolRequest(BaseModel):
     tool: str
