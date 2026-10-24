@@ -12,7 +12,9 @@ import {
   Activity,
   RotateCcw,
   Shield,
+  Network,
 } from 'lucide-react';
+import { ServiceTopologyExplorer } from './ServiceTopologyExplorer';
 import {
   EvidenceItem,
   InvestigationState,
@@ -43,6 +45,7 @@ export const InvestigationView: React.FC<InvestigationViewProps> = ({
   const [expandedDiagnosticIdx, setExpandedDiagnosticIdx] = useState<number | null>(null);
   const [expandedRemediationIdx, setExpandedRemediationIdx] = useState<number | null>(null);
   const [evidenceFilter, setEvidenceFilter] = useState<'all' | 'direct_observation' | 'diagnostic_result' | 'contradictory'>('all');
+  const [investigationSubView, setInvestigationSubView] = useState<'matrix' | 'topology'>('matrix');
 
   // No incident selected state
   if (!activeIncident && !investigation) {
@@ -298,6 +301,57 @@ export const InvestigationView: React.FC<InvestigationViewProps> = ({
         )}
       </div>
 
+      {/* Subview Toggle: Hypothesis & Ledger Cockpit vs Service Topology Explorer */}
+      <div className="flex items-center justify-between border-b border-[#DFD7C7] pb-2 flex-wrap gap-2">
+        <div className="flex items-center border border-[#DFD7C7] divide-x divide-[#DFD7C7] bg-[#ECE6DC]" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={investigationSubView === 'matrix'}
+            onClick={() => setInvestigationSubView('matrix')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors ${
+              investigationSubView === 'matrix'
+                ? 'bg-[#1C1917] text-[#FAF6F0]'
+                : 'bg-transparent text-[#6B6255] hover:text-[#1C1917]'
+            }`}
+          >
+            <Compass className="w-3.5 h-3.5" />
+            <span>01 HYPOTHESIS & LEDGER COCKPIT</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={investigationSubView === 'topology'}
+            onClick={() => setInvestigationSubView('topology')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors ${
+              investigationSubView === 'topology'
+                ? 'bg-[#1C1917] text-[#FAF6F0]'
+                : 'bg-transparent text-[#6B6255] hover:text-[#1C1917]'
+            }`}
+          >
+            <Network className="w-3.5 h-3.5" />
+            <span>02 SERVICE TOPOLOGY & DEPENDENCIES</span>
+          </button>
+        </div>
+
+        <span className="badge badge-synthetic font-mono text-[10px]">
+          {investigationSubView === 'matrix' ? 'VIEW: EVIDENCE MATRIX' : 'VIEW: SYNTHESIZED TOPOLOGY'}
+        </span>
+      </div>
+
+      {investigationSubView === 'topology' ? (
+        <ServiceTopologyExplorer
+          investigation={investigation}
+          incidentId={incident_id}
+          scenario={activeIncident?.scenario}
+          onSelectEvidence={(evId) => {
+            setInvestigationSubView('matrix');
+            setExpandedEvidenceId(evId);
+          }}
+        />
+      ) : (
+        <>
       {/* Row 1: Current Diagnosis & Symptoms */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Leading Diagnosis Card */}
@@ -1075,6 +1129,8 @@ export const InvestigationView: React.FC<InvestigationViewProps> = ({
             })}
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );
