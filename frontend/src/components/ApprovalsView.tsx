@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Layers,
   Shield,
+  Download,
 } from 'lucide-react';
 import { ActionDetail, Event, IncidentResponse, IncidentSummaryItem } from '../types';
 import { ActionInspector } from './ActionInspector';
@@ -90,6 +91,27 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({
     reversibility: payload.reversibility,
   };
 
+  const exportAuditTrail = () => {
+    const auditData = {
+      exportedAt: new Date().toISOString(),
+      incidentId: activeIncident?.incident_id || 'system-wide',
+      scenario: activeIncident?.scenario,
+      outcome: activeIncident?.outcome,
+      policyDecisions: activeIncident?.events?.filter((e) => e.type === 'policy_decision') || [],
+      approvalEvents: activeIncident?.events?.filter(
+        (e) => e.type === 'approval_requested' || e.type === 'human_approval_decision'
+      ) || [],
+      verificationChecks: activeIncident?.events?.filter((e) => e.type === 'verification_check') || [],
+    };
+    const blob = new Blob([JSON.stringify(auditData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit-trail-${activeIncident?.incident_id || 'incidents'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleDecision = async (decision: 'approve' | 'deny') => {
     if (!activeIncident?.incident_id || !approverId.trim()) return;
     await onSubmitApproval(
@@ -129,6 +151,16 @@ export const ApprovalsView: React.FC<ApprovalsViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={exportAuditTrail}
+              className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 font-mono"
+              title="Export audit log as structured JSON"
+              data-testid="export-audit-btn"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>EXPORT AUDIT</span>
+            </button>
             <button
               type="button"
               onClick={onRefresh}

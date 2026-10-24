@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Activity, Terminal } from 'lucide-react';
+import { Play, Activity, Terminal, Database, BookOpen } from 'lucide-react';
 import { BenchmarkParams, BenchmarkResult, BenchmarkRunResponse } from '../types';
 import { startBenchmark, fetchBenchmark, ApiError } from '../api/client';
 import { ThemeSelect } from './ThemeSelect';
@@ -34,6 +34,8 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
   const [selectedClient, setSelectedClient] = useState<string>('client_a');
   const [trials, setTrials] = useState<number>(3);
   const [seed, setSeed] = useState<number>(42);
+  const [benchmarkTab, setBenchmarkTab] = useState<'synthetic' | 'dataset'>('synthetic');
+  const [showFixturePreview, setShowFixturePreview] = useState<boolean>(false);
 
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkResult | null>(null);
@@ -115,6 +117,146 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
 
   return (
     <div className="flex flex-col gap-8 w-full max-w-5xl mx-auto px-6 py-8 items-center" data-testid="benchmark-view">
+      {/* Category Tab Selector: Synthetic Simulator vs Real-Dataset Evaluation (Phase 5) */}
+      <div className="w-full flex items-center justify-between border-b border-[#DFD7C7] pb-2 flex-wrap gap-2">
+        <div className="flex items-center border border-[#DFD7C7] divide-x divide-[#DFD7C7] bg-[#ECE6DC]" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={benchmarkTab === 'synthetic'}
+            onClick={() => setBenchmarkTab('synthetic')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors ${
+              benchmarkTab === 'synthetic'
+                ? 'bg-[#1C1917] text-[#FAF6F0]'
+                : 'bg-transparent text-[#6B6255] hover:text-[#1C1917]'
+            }`}
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            <span>01 Synthetic Simulator Benchmark</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={benchmarkTab === 'dataset'}
+            onClick={() => setBenchmarkTab('dataset')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors ${
+              benchmarkTab === 'dataset'
+                ? 'bg-[#1C1917] text-[#FAF6F0]'
+                : 'bg-transparent text-[#6B6255] hover:text-[#1C1917]'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span>02 Real-Dataset Diagnosis Evaluation (Phase 5)</span>
+          </button>
+        </div>
+
+        <span className="badge badge-synthetic font-mono text-[10px]">
+          {benchmarkTab === 'synthetic' ? 'ACTIVE: DETERMINISTIC SIMULATOR' : 'TARGET: CLOUD-OPSBENCH'}
+        </span>
+      </div>
+
+      {benchmarkTab === 'dataset' ? (
+        <div className="w-full flex flex-col gap-6" data-testid="real-dataset-eval-panel">
+          {/* Phase 5 Integration Status Banner */}
+          <div className="panel border-l-4 border-l-[#0E7490] w-full">
+            <div className="panel-header">
+              <h2 className="panel-title font-mono text-sm">
+                <Database className="w-4 h-4 text-[#0E7490]" />
+                <span>Phase 5 Real-Dataset Evaluation Engine</span>
+              </h2>
+              <span className="badge badge-amber font-mono text-xs">
+                BACKEND IN DEVELOPMENT
+              </span>
+            </div>
+
+            <div className="text-xs text-[#575044] font-sans leading-relaxed mb-4">
+              Pavan Aksshay is implementing the offline dataset diagnosis evaluation pipeline on{' '}
+              <code className="bg-[#ECE6DC] px-1.5 py-0.5 font-mono text-[#1C1917]">feat/phase5-dataset-evaluation</code>.
+              This panel provides the typed interface boundary ready to ingest and display real evaluation metrics without fabricated claims.
+            </div>
+
+            <div className="p-3.5 bg-[#FAF6F0] border border-[#DFD7C7] text-xs font-mono text-[#575044] flex flex-col gap-2">
+              <div className="flex items-center gap-2 font-bold text-[#1C1917]">
+                <BookOpen className="w-4 h-4 text-[#0E7490]" />
+                <span>INTEGRATION CONTRACT SPECIFICATION</span>
+              </div>
+              <ul className="list-disc pl-5 flex flex-col gap-1 text-[11px]">
+                <li><strong>Endpoint 1:</strong> <code className="bg-[#ECE6DC] px-1">GET /benchmark/dataset-evaluations</code> (historical evaluation runs)</li>
+                <li><strong>Endpoint 2:</strong> <code className="bg-[#ECE6DC] px-1">GET /benchmark/dataset-evaluations/&#123;id&#125;</code> (granular per-case traces)</li>
+                <li><strong>Target Dataset:</strong> Cloud-OpsBench Curated Test Split (120 real-world microservice incidents)</li>
+                <li><strong>Evaluation Core:</strong> Top-1 / Top-3 diagnosis accuracy, diagnostic efficiency ratio, and zero hallucination tolerance.</li>
+              </ul>
+              <div className="text-[10px] text-[#827869] pt-1">
+                Full contract documented in <code className="text-[#0E7490]">docs/PHASE5_FRONTEND_INTEGRATION.md</code>.
+              </div>
+            </div>
+
+            {/* Fixture preview toggle for development inspection */}
+            <div className="pt-4 mt-2 border-t border-[#DFD7C7] flex items-center justify-between">
+              <span className="text-xs font-mono text-[#6B6255]">
+                Developer UI Preview:
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowFixturePreview(!showFixturePreview)}
+                className="btn btn-secondary text-xs font-mono py-1 px-3"
+              >
+                {showFixturePreview ? 'HIDE FIXTURE PREVIEW' : 'INSPECT DEVELOPMENT FIXTURE'}
+              </button>
+            </div>
+          </div>
+
+          {/* Development Fixture Preview (Strictly labeled) */}
+          {showFixturePreview && (
+            <div className="panel border-2 border-amber-600 bg-[#FCFAF6] p-4 flex flex-col gap-4 w-full">
+              <div className="flex items-center justify-between bg-amber-100 p-2 border border-amber-300 text-xs font-mono text-amber-900 font-bold">
+                <span>⚠️ [DEVELOPMENT PREVIEW FIXTURE — NOT PRODUCTION EVALUATION DATA]</span>
+                <span className="badge badge-amber text-[9px]">MOCK FIXTURE</span>
+              </div>
+
+              {/* Target Metrics Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-[#FAF6F0] p-3 border border-[#DFD7C7]">
+                  <span className="text-[10px] font-mono uppercase text-[#6B6255] block">Top-1 Accuracy</span>
+                  <div className="text-xl font-mono font-bold text-emerald-800">84.2%</div>
+                  <span className="text-[10px] text-[#827869]">101 / 120 Cases</span>
+                </div>
+                <div className="bg-[#FAF6F0] p-3 border border-[#DFD7C7]">
+                  <span className="text-[10px] font-mono uppercase text-[#6B6255] block">Top-3 Accuracy</span>
+                  <div className="text-xl font-mono font-bold text-[#0E7490]">95.8%</div>
+                  <span className="text-[10px] text-[#827869]">115 / 120 Cases</span>
+                </div>
+                <div className="bg-[#FAF6F0] p-3 border border-[#DFD7C7]">
+                  <span className="text-[10px] font-mono uppercase text-[#6B6255] block">Mean Diagnostic Steps</span>
+                  <div className="text-xl font-mono font-bold text-[#1C1917]">3.4</div>
+                  <span className="text-[10px] text-[#827869]">Calls / Incident</span>
+                </div>
+                <div className="bg-[#FAF6F0] p-3 border border-[#DFD7C7]">
+                  <span className="text-[10px] font-mono uppercase text-[#6B6255] block">Diagnostic Efficiency</span>
+                  <div className="text-xl font-mono font-bold text-[#15803D]">78.0%</div>
+                  <span className="text-[10px] text-[#827869]">Informative Ratio</span>
+                </div>
+              </div>
+
+              {/* Sample Case Breakdown */}
+              <div className="bg-[#FAF6F0] p-3 border border-[#DFD7C7] font-mono text-xs">
+                <span className="font-bold text-[#1C1917] block mb-2">Sample Evaluation Case (Cloud-OpsBench):</span>
+                <div className="p-2.5 bg-[#ECE6DC] border border-[#DFD7C7] flex flex-col gap-1">
+                  <div className="flex justify-between items-center">
+                    <strong>case-042: Postgres Connection Starvation under Surge</strong>
+                    <span className="badge badge-emerald text-[9px]">MATCH: TRUE</span>
+                  </div>
+                  <div className="text-[#6B6255] text-[11px]">
+                    Ground Truth: <code className="text-[#1C1917]">resource_exhaustion</code> | Predicted: <code className="text-[#0E7490]">resource_exhaustion</code> (94% confidence)
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {/* Control & Configuration Panel */}
       <div className="panel border border-[#DFD7C7] bg-[#FAF6F0] w-full">
         <div className="panel-header flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
@@ -669,6 +811,8 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

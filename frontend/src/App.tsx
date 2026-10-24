@@ -30,6 +30,7 @@ import { VerificationPanel } from './components/VerificationPanel';
 import { EventTimeline } from './components/EventTimeline';
 import { IncidentHistory } from './components/IncidentHistory';
 import { BenchmarkView } from './components/BenchmarkView';
+import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { InvestigationView } from './components/InvestigationView';
 import { IncidentsView } from './components/IncidentsView';
 import { ApprovalsView } from './components/ApprovalsView';
@@ -431,7 +432,17 @@ export const App: React.FC = () => {
   // Determine which view to render
   let viewContent: JSX.Element | null = null;
 
-  if (activeView === 'benchmark') {
+  if (activeView === 'dashboard') {
+    viewContent = (
+      <AnalyticsDashboard
+        incidents={incidentsList}
+        isLoading={isLoadingHistory}
+        onRefresh={loadHistory}
+        onSelectIncident={handleSelectHistoricalIncident}
+        onNavigateToView={handleSelectView}
+      />
+    );
+  } else if (activeView === 'benchmark') {
     viewContent = (
       <BenchmarkView
         availableScenarios={scenariosData?.scenarios}
