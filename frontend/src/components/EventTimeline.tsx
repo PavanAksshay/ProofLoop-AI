@@ -41,10 +41,34 @@ export const EventTimeline: React.FC<EventTimelineProps> = ({
     switch (event.type) {
       case 'incident_opened':
         return `Incident opened for scenario "${p.scenario}" and client "${p.client}". Mode: ${p.requested_mode || 'proofloop'}`;
+      case 'investigation_started':
+        return `Investigation initiated (step limit: ${p.step_limit || 8}, action limit: ${p.action_limit || 3}). Authorized scope: [${(p.incident_scope || ['checkout-service']).join(', ')}]`;
       case 'evidence_collected':
         return `Evidence collected from ${p.source || 'checkout-service'}: ${Array.isArray(p.excerpt) ? p.excerpt.length : 0} log entries parsed.`;
+      case 'evidence_observed':
+        return `Observed evidence [${p.id || 'EVD'}] (${p.source || 'telemetry'}): ${p.description || p.kind || ''}`;
+      case 'evidence_correlated':
+        return `Correlated [${p.evidence_id || 'EVD'}]: supports [${(p.supporting_hypotheses || []).join(', ') || 'none'}], contradicts [${(p.contradicting_hypotheses || []).join(', ') || 'none'}]`;
+      case 'hypothesis_created':
+        return `Formulated hypothesis [${p.id || 'HYP'}]: ${p.description || p.category} (likelihood: ${((p.likelihood_score || 0) * 100).toFixed(0)}%)`;
+      case 'hypothesis_updated':
+        return `Updated competing hypotheses ranking (${(p.hypotheses || []).length} active)`;
+      case 'diagnostic_selected':
+        return `Selected diagnostic: ${p.tool} targeting ${p.target_hypothesis_id || 'competing hypotheses'} (EIV score: ${typeof p.eiv_score === 'number' ? p.eiv_score.toFixed(3) : p.eiv_score ?? 'N/A'})`;
+      case 'diagnostic_started':
+        return `Running diagnostic probe: ${p.tool}`;
+      case 'diagnostic_completed':
+        return `Diagnostic probe completed: ${p.tool} (${p.success ? 'SUCCESS' : 'FAILED'}, ${p.duration_ms ?? 0}ms)`;
+      case 'diagnosis_updated':
+        return `Diagnosis updated: ${p.primary_hypothesis_id || 'None'} [${p.status || 'tentative'}] - ${p.rationale || ''}`;
+      case 'diagnosis_sufficient':
+        return `Diagnosis reached sufficiency threshold for ${p.hypothesis_id} (confidence: ${((p.confidence || 0) * 100).toFixed(0)}%)`;
+      case 'diagnosis_uncertain':
+        return `Diagnosis remains uncertain: ${p.reason || 'Unresolved hypothesis conflicts'}`;
       case 'injection_detected':
         return `🚨 Instruction-like content found in untrusted logs. Treated strictly as data; authorization unchanged.`;
+      case 'remediation_proposed':
+        return `Remediation proposed: ${p.tool} (hypothesis: ${p.hypothesis_id || 'primary'}, confidence: ${((p.confidence || 0) * 100).toFixed(0)}%)`;
       case 'action_proposed':
         return `Investigator proposed: ${p.tool} (${p.service || 'checkout-service'}). Rationale: ${p.rationale || 'N/A'}`;
       case 'policy_decision':
@@ -57,18 +81,41 @@ export const EventTimeline: React.FC<EventTimelineProps> = ({
         return `Action rejected by policy re-evaluation at approval time: ${p.reason}`;
       case 'tool_executed':
         return `Synthetic execution: ${p.tool} -> ${p.success ? 'SUCCESS' : 'FAILED'} (${p.message || ''})`;
+      case 'remediation_evaluation_started':
+        return `Evaluating actual recovery for remediation: ${p.tool} (attempt ${p.attempt}, replanning cycle ${p.replanning_cycle ?? 0})`;
       case 'verification_check':
         return `Independent check: ${p.check_name} -> ${p.passed ? 'PASSED' : 'FAILED'}`;
       case 'verification_result':
         return `Independent verification summary: ${p.all_passed ? 'ALL CHECKS PASSED' : 'CHECKS FAILED'}`;
+      case 'independent_verification_failed':
+        return `Independent verification failed after ${p.tool}: [${(p.failed_checks || []).join(', ')}]`;
+      case 'recovery_invariant_failed':
+        return `Mandatory recovery invariant failed: ${p.invariant} after ${p.tool}`;
+      case 'post_action_evidence_observed':
+        return `Post-remediation observation [${p.id || 'EVD'}] (${p.source || 'telemetry'}): ${p.description || p.kind || ''}`;
+      case 'hypothesis_revised_after_remediation':
+        return `Hypothesis ranking revised post-remediation for replanning cycle ${p.replanning_cycle ?? 1}`;
+      case 'replanning_started':
+        return `Adaptive replanning started (cycle ${p.cycle ?? 1}): ${p.reason}. Remaining action budget: ${p.remaining_remediation_budget ?? 0}`;
+      case 'recovery_plan_changed':
+        return `Recovery plan adapted: ${p.reason || `from ${p.old_plan || 'initial'} to ${p.new_plan || 'revised'}`}`;
+      case 'new_remediation_proposed':
+        return `Adaptive remediation proposed: ${p.tool} for cycle ${p.cycle ?? 1}. Rationale: ${p.rationale || 'Address residual invariants'}`;
+      case 'retry_budget_exhausted':
+        return `Remediation retry budget exhausted (${p.attempts}/${p.limit} attempts). Halting further actions.`;
       case 'investigation_limit_reached':
-        return `Investigation limit exhausted (${p.limit || 8} steps). Halting automated actions.`;
+      case 'investigation_budget_exhausted':
+        return `Investigation budget exhausted (${p.steps || p.limit || 8}/${p.limit || 8} steps). Halting automated actions.`;
+      case 'escalation_reason_recorded':
+        return `Escalation reason recorded: ${p.reason}`;
+      case 'investigation_escalated':
+        return `Investigation escalated safely: ${p.reason}`;
       case 'outcome':
         return `Terminal incident outcome: ${p.outcome}. ${p.summary || ''}`;
       case 'worker_error':
         return `Background worker error: ${p.error_type || 'Unknown'}`;
       default:
-        return JSON.stringify(p);
+        return typeof p === 'object' && p !== null ? (p.message || p.summary || p.reason || JSON.stringify(p)) : String(p);
     }
   };
 
