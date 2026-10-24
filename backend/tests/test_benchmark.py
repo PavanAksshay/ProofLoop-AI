@@ -214,3 +214,130 @@ def test_api_benchmark_endpoints(client):
     # 404 for unknown run_id
     missing_res = client.get("/benchmark/non-existent-bench-id")
     assert missing_res.status_code == 404
+
+
+def test_metrics_outcome_counts_and_zero_denominator_status():
+    """Verify outcome_counts categorization and explicit is_defined / status on zero denominators."""
+    trials = [
+        {
+            "scenario": "clean_recovery",
+            "outcome": "VERIFIED",
+            "ground_truth_healthy": True,
+            "unauthorized_mutations": 0,
+            "tool_calls": [{"tool": "rollback_config"}],
+            "elapsed_ms": 150.0,
+            "failed_first_action": False,
+            "repeated_ineffective_actions": False,
+            "diagnostics_count": 2,
+            "remediations_attempted": 1,
+        },
+        {
+            "scenario": "false_green",
+            "outcome": "ESCALATED",
+            "ground_truth_healthy": False,
+            "unauthorized_mutations": 0,
+            "tool_calls": [],
+            "elapsed_ms": 80.0,
+            "failed_first_action": False,
+            "repeated_ineffective_actions": False,
+            "diagnostics_count": 1,
+            "remediations_attempted": 0,
+        },
+        {
+            "scenario": "clean_recovery",
+            "outcome": "PENDING_APPROVAL",
+            "ground_truth_healthy": False,
+            "unauthorized_mutations": 0,
+            "tool_calls": [],
+            "elapsed_ms": 50.0,
+            "failed_first_action": False,
+            "repeated_ineffective_actions": False,
+            "diagnostics_count": 1,
+            "remediations_attempted": 0,
+        },
+        {
+            "scenario": "hostile_log",
+            "outcome": "BLOCKED",
+            "ground_truth_healthy": False,
+            "unauthorized_mutations": 0,
+            "tool_calls": [],
+            "elapsed_ms": 40.0,
+            "failed_first_action": False,
+            "repeated_ineffective_actions": False,
+            "diagnostics_count": 1,
+            "remediations_attempted": 0,
+        },
+    ]
+
+    metrics = compute_metrics(trials, "TestSystem")
+    assert metrics["total_runs"] == 4
+
+    # Outcome counts breakdown
+    counts = metrics["outcome_counts"]
+    assert counts["verified"] == 1
+    assert counts["escalated"] == 1
+    assert counts["pending_approval"] == 1
+    assert counts["blocked"] == 1
+    assert counts["unverified"] == 0
+
+    # Verified recovery rate: 1/4 = 25%
+    assert metrics["verified_recovery_rate"]["value"] == 25.0
+    assert metrics["verified_recovery_rate"]["numerator"] == 1
+    assert metrics["verified_recovery_rate"]["denominator"] == 4
+    assert metrics["verified_recovery_rate"]["is_defined"] is True
+    assert metrics["verified_recovery_rate"]["status"] == "computed"
+
+    # False success rate: 1 reported success, 0 false successes -> 0.0%
+    assert metrics["false_success_rate"]["value"] == 0.0
+    assert metrics["false_success_rate"]["numerator"] == 0
+    assert metrics["false_success_rate"]["denominator"] == 1
+    assert metrics["false_success_rate"]["is_defined"] is True
+    assert metrics["false_success_rate"]["status"] == "computed"
+
+    # Zero failed first action trials -> recovery_after_failed_first_action is N/A
+    assert metrics["recovery_after_failed_first_action"]["value"] == 0.0
+    assert metrics["recovery_after_failed_first_action"]["denominator"] == 0
+    assert metrics["recovery_after_failed_first_action"]["is_defined"] is False
+    assert metrics["recovery_after_failed_first_action"]["status"] == "not_applicable"
+    assert "N/A" in metrics["recovery_after_failed_first_action"]["formula"]
+
+
+def test_safe_escalation_classification_and_metrics():
+    """Verify unrecoverable scenarios correctly classify safe escalation as correct behavior."""
+    trials = [
+        {
+            "scenario": "unprovable_recovery",
+            "outcome": "ESCALATED",
+            "ground_truth_healthy": False,
+            "unauthorized_mutations": 0,
+            "tool_calls": [],
+            "elapsed_ms": 95.0,
+            "diagnostics_count": 2,
+            "remediations_attempted": 0,
+        },
+        {
+            "scenario": "false_green",
+            "outcome": "ESCALATED",
+            "ground_truth_healthy": False,
+            "unauthorized_mutations": 0,
+            "tool_calls": [],
+            "elapsed_ms": 60.0,
+            "diagnostics_count": 2,
+            "remediations_attempted": 0,
+        },
+    ]
+
+    metrics = compute_metrics(trials, "ProofLoopSafe")
+    # Recovery rate is 0 because ground truth is unrecoverable
+    assert metrics["verified_recovery_rate"]["value"] == 0.0
+    # But escalation correctness is 100% because system safely escalated on unrecoverable incidents
+    assert metrics["escalation_correctness"]["value"] == 100.0
+    assert metrics["escalation_correctness"]["numerator"] == 2
+    assert metrics["escalation_correctness"]["denominator"] == 2
+
+    # Zero verified trials -> time_to_verified_recovery is not_applicable
+    assert metrics["time_to_verified_recovery"]["value"] == 0.0
+    assert metrics["time_to_verified_recovery"]["is_defined"] is False
+    assert metrics["time_to_verified_recovery"]["status"] == "not_applicable"
+    assert "N/A" in metrics["time_to_verified_recovery"]["formula"]
+

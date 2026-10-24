@@ -53,8 +53,8 @@ Returns the incident response with metadata, investigation state, and its persis
 Returns the typed `InvestigationState` for the incident, persisting structured telemetry across replanning cycles:
 - `incident_id`: Unique identifier for the incident run.
 - `step`: Current investigation step count.
-- `hypotheses`: Array of competing `Hypothesis` objects (`id`, `category`, `description`, `likelihood_score`, `supporting_evidence_ids`, `contradicting_evidence_ids`, `proposed_remediation`).
-- `evidence_ledger`: Array of observed `EvidenceItem` objects (`id`, `timestamp`, `source`, `kind`, `description`, `raw_payload`).
+- `hypotheses`: Array of competing `Hypothesis` objects (`id`, `title`, `description`, `category`, `confidence_score`, `supporting_evidence_ids`, `contradicting_evidence_ids`, `status`, `suggested_remediation`).
+- `evidence_ledger`: Array of observed `EvidenceItem` objects (`id`, `source`, `kind`, `summary`, `data`, `timestamp`).
 - `diagnostics_performed`: Array of `DiagnosticResult` records (`tool`, `arguments`, `success`, `observed_telemetry`, `information_value`, `supporting_evidence_ids`).
 - `remediation_history`: Array of `RemediationRecord` objects with full lineage (`id`, `tool`, `service`, `arguments`, `attempt`, `success`, `originating_hypothesis_id`, `supporting_evidence_ids`, `policy_decision`, `policy_rule_id`, `approver_id`, `execution_result`, `error`, `resulting_observations`, `verification_passed`, `verification_checks`, `replanning_reason`).
 - `budget`: `InvestigationBudget` (`steps_taken`, `max_steps`, `diagnostics_executed`, `max_diagnostics`, `remediations_proposed`, `remediations_blocked`, `remediations_pending_approval`, `remediations_attempted`, `max_remediations`).
@@ -62,19 +62,34 @@ Returns the typed `InvestigationState` for the incident, persisting structured t
 - `last_evaluation_summary`: Summary of post-remediation evaluation.
 - `escalation_reason`: Explicit reason if the incident escalated.
 
+**Error Responses:**
+- `404 Not Found`:
+  - `{"detail": "Incident not found."}` if the incident ID does not exist.
+  - `{"detail": "Investigation state not found for this incident."}` if the incident exists but investigation telemetry has not been recorded yet.
+
 ### `GET /incidents/{incident_id}/events?after=0`
 
-Server-Sent Events (SSE) replay. The optional `after` value is an event sequence cursor, not an event ID. Each message contains:
-- `id`: persisted sequence number
-- `event`: event type
-- `data`: JSON event with `sequence`, `event_id`, `incident_id`, `timestamp`, `type`, `actor`, `payload`, and `evidence_refs`
-
-Reconnect using the last received numeric sequence as `after`. Events are append-only and can be replayed. A stream closes after the incident reaches a final outcome and all available events have been sent.
+Server-Sent Events (SSE) stream and replay endpoint.
+- Query Parameter: `after: int = 0` (inclusive start cursor based on numeric `sequence`).
+- Format: `text/event-stream` with headers `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
+- Each frame contains:
+  ```text
+  id: <sequence_number>
+  event: <event_type>
+  data: {"sequence": 1, "event_id": "...", "incident_id": "...", "timestamp": "...", "type": "...", "actor": "...", "payload": {...}, "evidence_refs": [...]}
+  ```
+- **Lifecycle & Replay Semantics:**
+  - When connecting with `after=0`, all recorded events from sequence 1 onward are delivered in strict chronological order.
+  - When reconnecting after network interruption, provide the highest received `id` as `after` to resume without duplicate processing.
+  - When an incident is active or in `PENDING_APPROVAL`, the connection remains open. Every ~2.5 seconds (10 poll intervals) of inactivity, the server emits `: keep-alive\n\n`.
+  - Once the incident transitions to a terminal outcome (`VERIFIED`, `ESCALATED`, `BLOCKED`, `UNVERIFIED`) AND all remaining events have been yielded, the server closes the stream cleanly.
+  - If the incident ID does not exist, returns `404 Not Found` (`{"detail": "Incident not found."}`).
 
 ## Start and Approval Flow
 
 ### `POST /incidents/start`
 
+Starts an asynchronous incident execution task.
 Request:
 ```json
 {
@@ -83,15 +98,26 @@ Request:
   "mode": "proofloop"
 }
 ```
-
-Returns HTTP 202 with `incident_id`, initial `outcome`, `events_url`, and `incident_url`. Open the event stream and poll/read the incident endpoint for current status.
+Response (`202 Accepted`):
+```json
+{
+  "incident_id": "771b9df5-6352-475a-a38f-be88c03975fa",
+  "outcome": "RUNNING",
+  "events_url": "/incidents/771b9df5-6352-475a-a38f-be88c03975fa/events",
+  "incident_url": "/incidents/771b9df5-6352-475a-a38f-be88c03975fa"
+}
+```
+- Returns `422 Unprocessable Entity` if `scenario` is not in `SUPPORTED_SCENARIOS`.
 
 ### `POST /incidents`
 
-Runs a scenario synchronously and returns the complete `IncidentResponse`. Useful for direct test inspection and debugging.
+Synchronous incident run endpoint. Runs the full scenario lifecycle in-process and returns the terminal `IncidentResponse`.
+- Returns `200 OK` with complete `IncidentResponse` model.
+- Returns `422 Unprocessable Entity` on unknown scenario.
 
 ### `POST /incidents/{incident_id}/approval`
 
+Submits an operator authorization decision for a paused incident (`PENDING_APPROVAL`).
 Request:
 ```json
 {
@@ -100,17 +126,28 @@ Request:
   "comment": "Authorized database pool repair following failed rollback"
 }
 ```
+- `decision`: Must be `"approve"` or `"deny"`.
+- `approver_id`: Required string (non-empty, non-whitespace).
+- `comment`: Optional explanatory audit note.
 
-`decision` must be `approve` or `deny`. The UI must show the exact proposed tool, service, arguments, policy rule, and reason from the `approval_requested` event before enabling the decision controls. 
-- A rejected or already-resolved decision returns HTTP 409 Conflict.
-- Non-existent approvals return HTTP 404 Not Found.
-- Blank or whitespace-only approver IDs return HTTP 422 Unprocessable Entity.
+**Status Code Contract:**
+- `200 OK`: Approval accepted and processed. Returns updated `IncidentResponse`.
+- `404 Not Found`: No pending approval exists for this incident ID.
+- `409 Conflict`: Approval cannot be processed because:
+  - It is currently being processed by another concurrent request.
+  - It has already been resolved (`resolved` status).
+  - The incident has already transitioned to a final outcome.
+- `403 Forbidden`: Policy revalidation rejected the action at approval time (e.g. policy tightened or target disallowed). Action is blocked and marked `Outcome.BLOCKED`.
+- `422 Unprocessable Entity`: Invalid request payload (e.g. `decision` not in enum, empty `approver_id`).
 
 ## Benchmark Endpoints
 
 ### `POST /benchmark`
 
 Starts an empirical comparison between the legacy scripted baseline and ProofLoop AI.
+Query Parameters:
+- `sync: bool = false`: If true, executes synchronously and returns `202 Accepted` with `"result"` populated. If false, runs asynchronously in background.
+
 Request:
 ```json
 {
@@ -120,12 +157,50 @@ Request:
   "seed": 42
 }
 ```
-
-Returns HTTP 202 with `run_id`, `status: "running" | "completed"`, and `benchmark_url`.
+Response (`202 Accepted`):
+```json
+{
+  "run_id": "bench-56abba90d951",
+  "status": "running",
+  "benchmark_url": "/benchmark/bench-56abba90d951"
+}
+```
 
 ### `GET /benchmark/{run_id}`
 
-Retrieves the completed benchmark results including metrics (`verified_recovery_rate`, `false_success_rate`, `unauthorized_mutations`, `recovery_after_failed_first_action`, `repeated_ineffective_action_rate`, `avg_diagnostics_per_run`, `avg_remediations_per_run`, `time_to_verified_recovery`), per-scenario breakdowns, and trial details.
+Retrieves the benchmark report.
+- Returns `200 OK` with full benchmark report:
+  - `run_id`: Benchmark identifier.
+  - `timestamp`: UTC ISO-8601 timestamp.
+  - `software_revision`: Git commit hash.
+  - `parameters`: Scenario list, supported scenarios evaluated, client policy, trials count, seed.
+  - `metrics`: Dictionary comparing `baseline` and `proofloop`:
+    - `outcome_counts`: `{"verified": int, "escalated": int, "pending_approval": int, "blocked": int, "unverified": int}`
+    - Metric records:
+      - `verified_recovery_rate`
+      - `false_success_rate`
+      - `unauthorized_mutations`
+      - `avg_tool_calls`
+      - `avg_time_ms`
+      - `escalation_correctness`
+      - `recovery_after_failed_first_action`
+      - `repeated_ineffective_action_rate`
+      - `avg_diagnostics_per_run`
+      - `avg_remediations_per_run`
+      - `time_to_verified_recovery`
+  - Metric record fields:
+    - `value`: float rounded to 2 decimal places.
+    - `numerator`: int
+    - `denominator`: int
+    - `formula`: Human-readable formula string.
+    - `description`: Metric definition.
+    - `is_defined`: boolean (`true` if denominator > 0, `false` if zero denominator / undefined).
+    - `status`: string (`"computed"` when defined, `"not_applicable"` when zero denominator).
+  - `per_scenario`: Breakdown per scenario.
+  - `raw_trials`: Complete trial telemetry for baseline and ProofLoop.
+  - `skipped_scenarios`: Scenarios not supported by simulator, with explicit skipped reasons.
+  - `disclaimer`: Explicit synthetic execution notice.
+- `404 Not Found`: If `run_id` does not exist (`{"detail": "Benchmark run not found."}`).
 
 ## Event Types the Dashboard Recognizes
 
