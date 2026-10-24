@@ -27,6 +27,9 @@ Thumbs.db
 *.jsonl
 logs/
 benchmark/results/
+datasets/raw/
+datasets/downloaded/
+datasets/cache/
 
 # Local SQLite runtime database
 *.db

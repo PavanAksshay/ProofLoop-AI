@@ -262,3 +262,70 @@ Retrieves the benchmark report.
 6. Show each verifier check and the final outcome. Never mark recovery as verified solely from a green health endpoint.
 7. Handle 404/409/422 responses and reconnect SSE with the last numeric sequence.
 8. Label all execution and metrics as synthetic/simulated.
+
+---
+
+## Phase 5: Real-World Dataset Diagnosis Evaluation Contract
+
+Phase 5 introduces reproducible offline root-cause diagnosis evaluation against real-world operational datasets (specifically Cloud-OpsBench) without mutating live infrastructure.
+
+### Execution Interface
+```bash
+python -m benchmark.cli --dataset cloud_opsbench \
+  --dataset-path datasets/fixtures/cloud_opsbench_sample.json \
+  --output benchmark/results/dataset_latest.json \
+  --output-csv benchmark/results/dataset_latest.csv
+```
+
+### Machine-Readable Evaluation Report Schema (`benchmark/results/*.json`)
+```json
+{
+  "run_id": "dataset-eval-09a4c48121",
+  "timestamp": "2026-10-24T07:43:06.020238+00:00",
+  "software_revision": "f3c8964",
+  "dataset": {
+    "name": "Cloud-OpsBench",
+    "version": "v1.0.0",
+    "total_cases_loaded": 5,
+    "eligible_evaluated_cases": 5,
+    "excluded_cases_count": 0,
+    "failed_cases_count": 0
+  },
+  "metrics": {
+    "proofloop": {
+      "system": "ProofLoop AI",
+      "top1_accuracy": { "value": 100.0, "numerator": 5, "denominator": 5, "is_defined": true },
+      "top3_accuracy": { "value": 100.0, "numerator": 5, "denominator": 5, "is_defined": true },
+      "category_accuracy": { "value": 100.0, "numerator": 5, "denominator": 5, "is_defined": true },
+      "avg_diagnostics_per_case": 2.2,
+      "avg_elapsed_ms": 0.25,
+      "evidence_traceability_rate": { "value": 100.0, "numerator": 5, "denominator": 5, "is_defined": true }
+    },
+    "baseline": {
+      "system": "Heuristic Baseline",
+      "top1_accuracy": { "value": 60.0, "numerator": 3, "denominator": 5, "is_defined": true },
+      "top3_accuracy": { "value": 80.0, "numerator": 4, "denominator": 5, "is_defined": true }
+    }
+  },
+  "per_case_evaluation": [
+    {
+      "case_id": "cloud_opsbench:boutique/admission/1",
+      "system": "boutique",
+      "status": "evaluated",
+      "top1_prediction": "missing_service_account",
+      "top3_predictions": ["missing_service_account"],
+      "ground_truth_root_cause": "missing_service_account",
+      "ground_truth_fault_object": "app/adservice",
+      "top1_match": true,
+      "top3_match": true,
+      "category_match": true,
+      "confidence": 0.85,
+      "diagnostics_called": ["GetResources:...", "DescribeResource:..."],
+      "evidence_count": 3,
+      "elapsed_ms": 0.22
+    }
+  ],
+  "excluded_cases": [],
+  "disclaimer": "All measurements reflect read-only operational diagnosis against pre-recorded state snapshots. No live systems were modified."
+}
+```
