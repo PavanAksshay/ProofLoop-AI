@@ -1,8 +1,8 @@
 import React from 'react';
-import { ShieldCheck, Activity, Terminal, Compass, History, ShieldAlert, TrendingUp } from 'lucide-react';
+import { ShieldCheck, Activity, Terminal, Compass, History, ShieldAlert, TrendingUp, Boxes } from 'lucide-react';
 import { HealthResponse } from '../types';
 
-export type ActiveViewKey = 'dashboard' | 'operations' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
+export type ActiveViewKey = 'dashboard' | 'operations' | 'agent_engine' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
 
 interface HeaderProps {
   health?: HealthResponse | null;
@@ -74,6 +74,20 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 <Activity className="w-3.5 h-3.5" />
                 <span>// 01 OPERATIONS</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onSelectView('agent_engine')}
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                  activeView === 'agent_engine'
+                    ? 'bg-[#1C1917] text-[#FAF6F0]'
+                    : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
+                }`}
+                aria-label="3D Agent Engine View"
+              >
+                <Boxes className="w-3.5 h-3.5" />
+                <span>// 02 3D ENGINE</span>
               </button>
 
               <button
