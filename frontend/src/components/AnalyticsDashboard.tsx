@@ -186,31 +186,55 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </div>
 
-        {/* False Success Rate (Strict Zero-Tolerance) */}
+        {/* False-Success Rate — unavailable without per-incident verification records */}
         <div className="panel p-4 flex flex-col justify-between gap-2 border-t-2 border-t-cyan-700">
           <div className="flex items-center justify-between text-[#6B6255] font-mono text-xs">
             <span className="uppercase tracking-wider">False-Success Rate</span>
             <ShieldCheck className="w-4 h-4 text-cyan-700" />
           </div>
-          <div className="text-2xl font-mono font-bold text-[#1C1917]">
-            {(analytics.falseSuccessRate * 100).toFixed(1)}%
-          </div>
-          <div className="text-[11px] font-mono text-emerald-700">
-            ✓ Zero unverified success claims
+          {analytics.falseSuccessRate !== null ? (
+            <div className="text-2xl font-mono font-bold text-[#1C1917]">
+              {(analytics.falseSuccessRate * 100).toFixed(1)}%
+            </div>
+          ) : (
+            <div
+              className="text-lg font-mono font-bold text-[#827869]"
+              data-testid="false-success-unavailable"
+              title={analytics.falseSuccessExplanation}
+            >
+              UNAVAILABLE
+            </div>
+          )}
+          <div className="text-[11px] font-mono text-[#827869] leading-tight" title={analytics.falseSuccessExplanation}>
+            {analytics.falseSuccessRate !== null
+              ? `Computed from ${analytics.falseSuccessDenominator ?? analytics.totalIncidents} verified records`
+              : 'Requires per-incident verification records — see backend contract gap'}
           </div>
         </div>
 
-        {/* Policy Gate Violations */}
+        {/* Policy Gate Violations — unavailable without SSE event stream policy records */}
         <div className="panel p-4 flex flex-col justify-between gap-2 border-t-2 border-t-[#B45309]">
           <div className="flex items-center justify-between text-[#6B6255] font-mono text-xs">
             <span className="uppercase tracking-wider">Policy Gate Violations</span>
             <ShieldAlert className="w-4 h-4 text-[#B45309]" />
           </div>
-          <div className="text-2xl font-mono font-bold text-[#1C1917]">
-            {(analytics.policyViolationRate * 100).toFixed(1)}%
-          </div>
-          <div className="text-[11px] font-mono text-[#6B6255]">
-            100% deterministic gate enforcement
+          {analytics.policyViolationRate !== null ? (
+            <div className="text-2xl font-mono font-bold text-[#1C1917]">
+              {(analytics.policyViolationRate * 100).toFixed(1)}%
+            </div>
+          ) : (
+            <div
+              className="text-lg font-mono font-bold text-[#827869]"
+              data-testid="policy-violation-unavailable"
+              title={analytics.policyViolationExplanation}
+            >
+              UNAVAILABLE
+            </div>
+          )}
+          <div className="text-[11px] font-mono text-[#827869] leading-tight" title={analytics.policyViolationExplanation}>
+            {analytics.policyViolationRate !== null
+              ? `${analytics.blockedActionCount ?? 0} blocked, ${analytics.attemptedViolationCount ?? 0} attempted violations`
+              : 'Requires SSE policy-decision event records — see backend contract gap'}
           </div>
         </div>
       </div>
@@ -410,6 +434,25 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             ))}
           </div>
         )}
+      </div>
+      {/* Backend Contract Gap Documentation */}
+      <div className="panel p-3 border-l-4 border-l-amber-500 bg-amber-50 font-mono text-[11px] text-[#6B6255]">
+        <div className="font-bold text-amber-800 mb-1 uppercase tracking-wider">⚠ Backend Contract Gaps — Metrics Marked UNAVAILABLE</div>
+        <ul className="list-disc pl-4 space-y-1 text-[#6B6255]">
+          <li>
+            <strong>False-Success Rate</strong>: Requires per-incident verification check records{' '}
+            (<code>GET /incidents/:id/investigation &rarr; remediation_history[].verification_checks</code>).
+            The <code>GET /incidents</code> aggregate endpoint does not expose these.
+          </li>
+          <li>
+            <strong>Policy Violation Rate</strong>: Requires policy decision event records from the SSE event stream
+            (<code>action_proposed</code> / <code>policy_decision</code> events).
+            These are not exposed in <code>GET /incidents</code> aggregate responses.
+          </li>
+        </ul>
+        <div className="mt-1 text-[10px] text-amber-700">
+          Note: UNAVAILABLE does not mean violations never occurred — it means the data cannot be computed without additional backend endpoints.
+        </div>
       </div>
     </div>
   );

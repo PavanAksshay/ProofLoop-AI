@@ -38,6 +38,14 @@ describe('Service Topology & Root-Cause Explorer', () => {
         data: {},
         timestamp: '2026-10-24T10:01:00Z',
       },
+      {
+        id: 'ev-gw-logs',
+        source: 'edge-gateway.log',
+        kind: 'direct_observation',
+        summary: 'upstream HTTP 500 from checkout-service',
+        data: {},
+        timestamp: '2026-10-24T10:01:30Z',
+      },
     ],
     diagnostics_performed: [
       {
@@ -90,6 +98,7 @@ describe('Service Topology & Root-Cause Explorer', () => {
   it('infers service nodes, health statuses, and links from diagnostics and evidence', () => {
     const graph = inferServiceTopology(mockInvestigation, 'inc-topo-001');
 
+    expect(graph.hasSufficientTelemetry).toBe(true);
     expect(graph.nodes.some((n) => n.id === 'database')).toBe(true);
     expect(graph.nodes.some((n) => n.id === 'checkout-service')).toBe(true);
     expect(graph.nodes.some((n) => n.id === 'edge-gateway')).toBe(true);
@@ -97,8 +106,12 @@ describe('Service Topology & Root-Cause Explorer', () => {
     const dbNode = graph.nodes.find((n) => n.id === 'database');
     expect(dbNode?.isSuspectedRootCause).toBe(true);
     expect(dbNode?.isRemediationTarget).toBe(true);
+    expect(dbNode?.provenance).toBe('observed');
+    expect(dbNode?.status).toBe('healthy'); // independent verification passed
 
     expect(graph.links.length).toBeGreaterThan(0);
+    expect(graph.links.every((l) => l.provenance === 'inferred')).toBe(true);
+    expect(graph.links.every((l) => l.protocol === null)).toBe(true);
   });
 
   it('renders honest unavailable state when investigation is null', () => {

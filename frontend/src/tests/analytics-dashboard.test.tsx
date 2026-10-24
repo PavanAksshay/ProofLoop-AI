@@ -46,8 +46,10 @@ describe('Incident Analytics Dashboard', () => {
     expect(analytics.escalatedCount).toBe(1);
     expect(analytics.pendingApprovals).toBe(1);
     expect(analytics.verifiedRecoveryRate).toBeCloseTo(1 / 3, 2);
-    expect(analytics.falseSuccessRate).toBe(0.0);
-    expect(analytics.policyViolationRate).toBe(0.0);
+    expect(analytics.falseSuccessRate).toBeNull();
+    expect(analytics.policyViolationRate).toBeNull();
+    expect(analytics.falseSuccessExplanation).toContain('Cannot be computed');
+    expect(analytics.policyViolationExplanation).toContain('Cannot be computed');
     expect(analytics.meanTimeToRecoveryMs).toBe(150000); // 150 seconds
   });
 
@@ -57,10 +59,12 @@ describe('Incident Analytics Dashboard', () => {
     expect(analytics.totalIncidents).toBe(0);
     expect(analytics.verifiedRecoveries).toBe(0);
     expect(analytics.verifiedRecoveryRate).toBe(0);
+    expect(analytics.falseSuccessRate).toBeNull();
+    expect(analytics.policyViolationRate).toBeNull();
     expect(analytics.meanTimeToRecoveryMs).toBeNull();
   });
 
-  it('renders KPI statistic cards with verified recovery rate and zero false-success rate', () => {
+  it('renders KPI statistic cards with verified recovery rate and transparent unavailable states for metrics lacking telemetry', () => {
     render(
       <AnalyticsDashboard
         incidents={mockIncidents}
@@ -74,12 +78,13 @@ describe('Incident Analytics Dashboard', () => {
     expect(screen.getByText('OPERATIONAL ANALYTICS & GOVERNANCE DASHBOARD')).toBeInTheDocument();
     expect(screen.getByText('Total Incidents')).toBeInTheDocument();
     expect(screen.getByText('Verified Recovery')).toBeInTheDocument();
-    expect(screen.getByText('False-Success Rate')).toBeInTheDocument();
-    expect(screen.getByText('Policy Gate Violations')).toBeInTheDocument();
+    expect(screen.getAllByText('False-Success Rate').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Policy Gate Violations').length).toBeGreaterThanOrEqual(1);
 
-    // False-success rate and policy violation rate both show 0.0%
-    expect(screen.getAllByText('0.0%').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('✓ Zero unverified success claims')).toBeInTheDocument();
+    // False-success rate and policy violation rate both show UNAVAILABLE
+    expect(screen.getByTestId('false-success-unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('policy-violation-unavailable')).toBeInTheDocument();
+    expect(screen.getAllByText('UNAVAILABLE').length).toBeGreaterThanOrEqual(2);
   });
 
   it('filters metrics by scenario selector', () => {

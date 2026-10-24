@@ -361,6 +361,8 @@ export interface PolicyDecisionRecord {
 }
 
 
+export type ProvenanceKind = 'observed' | 'inferred' | 'unknown';
+
 export interface IncidentAnalyticsSummary {
   totalIncidents: number;
   verifiedRecoveries: number;
@@ -369,9 +371,16 @@ export interface IncidentAnalyticsSummary {
   pendingApprovals: number;
   runningCount: number;
   verifiedRecoveryRate: number; // 0.0 - 1.0
-  falseSuccessRate: number; // strict zero-tolerance 0.0
-  policyViolationRate: number; // 0.0 enforced by policy gate
-  meanTimeToRecoveryMs: number | null; // null if timestamps unavailable
+  falseSuccessRate: number | null; // null when ground truth / check records unavailable
+  falseSuccessExplanation: string;
+  falseSuccessNumerator?: number;
+  falseSuccessDenominator?: number;
+  policyViolationRate: number | null; // null when policy decision history is unavailable
+  policyViolationExplanation: string;
+  blockedActionCount?: number;
+  attemptedViolationCount?: number;
+  meanTimeToRecoveryMs: number | null; // null if timestamps unavailable or invalid
+  recoveryDurationExplanation: string;
   scenarioBreakdown: Record<string, { total: number; verified: number; escalated: number; failed: number }>;
   clientBreakdown: Record<string, number>;
   outcomeBreakdown: Record<Outcome, number>;
@@ -383,6 +392,8 @@ export interface ServiceTopologyNode {
   name: string;
   type: 'service' | 'database' | 'gateway' | 'config' | 'cache' | 'external';
   status: 'healthy' | 'degraded' | 'failed' | 'unknown';
+  provenance: ProvenanceKind;
+  statusRationale: string;
   observedLatencyMs?: number;
   observedErrorRate?: number;
   isSuspectedRootCause?: boolean;
@@ -394,9 +405,11 @@ export interface ServiceTopologyNode {
 export interface ServiceTopologyLink {
   source: string;
   target: string;
-  protocol?: string;
+  provenance: 'inferred' | 'observed';
+  protocol?: string | null;
   healthy: boolean;
   observedErrors?: number;
+  rationale: string;
 }
 
 export interface ServiceTopologyGraph {
@@ -404,6 +417,8 @@ export interface ServiceTopologyGraph {
   links: ServiceTopologyLink[];
   inferredAt?: string;
   sourceIncidentId: string;
+  hasSufficientTelemetry: boolean;
+  unavailableReason?: string;
 }
 
 export interface DatasetEvaluationSummaryItem {

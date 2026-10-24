@@ -53,7 +53,7 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
     }
   };
 
-  if (!investigation || graph.nodes.length === 0) {
+  if (!investigation || graph.nodes.length === 0 || !graph.hasSufficientTelemetry) {
     return (
       <div className="panel p-10 flex flex-col items-center justify-center text-center gap-3 my-6" data-testid="topology-unavailable">
         <Network className="w-8 h-8 text-[#827869]" />
@@ -99,8 +99,14 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
 
         {/* Legend */}
         <div className="flex items-center justify-between flex-wrap gap-2 text-xs font-mono bg-[#FAF6F0] p-2.5 border border-[#DFD7C7]">
-          <span className="font-bold text-[#1C1917]">PROVENANCE LEGEND:</span>
+          <span className="font-bold text-[#1C1917]">PROVENANCE &amp; STATUS LEGEND:</span>
           <div className="flex items-center gap-3 flex-wrap text-[11px]">
+            <span className="flex items-center gap-1 text-cyan-800 font-bold">
+              <span className="badge badge-cyan text-[9px]">OBSERVED</span> Telemetry Record
+            </span>
+            <span className="flex items-center gap-1 text-amber-800 font-bold">
+              <span className="badge badge-amber text-[9px]">INFERRED</span> Co-occurrence / Hypothesis
+            </span>
             <span className="flex items-center gap-1 text-emerald-800">
               <CheckCircle2 className="w-3.5 h-3.5" /> Healthy (Verified)
             </span>
@@ -160,19 +166,33 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
                       </div>
                     </div>
 
-                    <span
-                      className={`badge font-mono text-[10px] ${
-                        node.status === 'healthy'
-                          ? 'badge-emerald'
-                          : node.status === 'degraded'
-                          ? 'badge-amber'
-                          : node.status === 'failed'
-                          ? 'badge-rose'
-                          : 'badge-synthetic'
-                      }`}
-                    >
-                      {node.status.toUpperCase()}
-                    </span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span
+                        className={`badge font-mono text-[10px] ${
+                          node.status === 'healthy'
+                            ? 'badge-emerald'
+                            : node.status === 'degraded'
+                            ? 'badge-amber'
+                            : node.status === 'failed'
+                            ? 'badge-rose'
+                            : 'badge-synthetic'
+                        }`}
+                      >
+                        {node.status.toUpperCase()}
+                      </span>
+                      <span
+                        className={`badge font-mono text-[9px] uppercase ${
+                          node.provenance === 'observed'
+                            ? 'badge-cyan'
+                            : node.provenance === 'inferred'
+                            ? 'badge-amber'
+                            : 'badge-synthetic'
+                        }`}
+                        title={`Provenance: ${node.provenance}`}
+                      >
+                        {node.provenance}
+                      </span>
+                    </div>
                   </div>
 
                   {node.isSuspectedRootCause && (
@@ -181,6 +201,10 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
                       <span>LEADING SUSPECTED ROOT CAUSE</span>
                     </div>
                   )}
+
+                  <div className="text-[10px] font-mono text-[#6B6255] line-clamp-1 italic" title={node.statusRationale}>
+                    {node.statusRationale}
+                  </div>
 
                   <div className="pt-2 border-t border-[#DFD7C7] flex justify-between items-center text-[10px] font-mono text-[#6B6255]">
                     <span>Diagnostics: {node.diagnosticsRun.length}</span>
@@ -200,12 +224,19 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
               {graph.links.map((link, idx) => (
                 <div
                   key={idx}
-                  className="p-2 bg-[#FAF6F0] border border-[#DFD7C7] font-mono text-xs flex items-center justify-between"
+                  className="p-2 bg-[#FAF6F0] border border-[#DFD7C7] font-mono text-xs flex items-center justify-between gap-2"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-bold text-[#1C1917]">{link.source}</span>
                     <ArrowRight className="w-3.5 h-3.5 text-[#827869]" />
                     <span className="font-bold text-[#1C1917]">{link.target}</span>
+                    <span
+                      className={`badge text-[9px] uppercase ${
+                        link.provenance === 'observed' ? 'badge-cyan' : 'badge-amber'
+                      }`}
+                    >
+                      {link.provenance} link
+                    </span>
                     {link.protocol && (
                       <span className="badge badge-synthetic text-[9px]">
                         {link.protocol}
@@ -216,8 +247,9 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
                     className={`badge text-[10px] ${
                       link.healthy ? 'badge-emerald' : 'badge-rose'
                     }`}
+                    title={link.rationale}
                   >
-                    {link.healthy ? 'HEALTHY LINK' : 'DEGRADED LINK'}
+                    {link.healthy ? 'HEALTHY' : 'DEGRADED'}
                   </span>
                 </div>
               ))}
@@ -244,7 +276,7 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
                   <div className="text-sm font-bold text-[#1C1917] mt-0.5">
                     {selectedNode.name}
                   </div>
-                  <div className="flex items-center gap-2 mt-2">
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
                     <span
                       className={`badge text-[10px] ${
                         selectedNode.status === 'healthy'
@@ -258,11 +290,25 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
                     >
                       Status: {selectedNode.status.toUpperCase()}
                     </span>
+                    <span
+                      className={`badge text-[10px] uppercase ${
+                        selectedNode.provenance === 'observed'
+                          ? 'badge-cyan'
+                          : selectedNode.provenance === 'inferred'
+                          ? 'badge-amber'
+                          : 'badge-synthetic'
+                      }`}
+                    >
+                      Provenance: {selectedNode.provenance}
+                    </span>
                     {selectedNode.isRemediationTarget && (
                       <span className="badge badge-amber text-[10px]">
                         Remediation Target
                       </span>
                     )}
+                  </div>
+                  <div className="text-[11px] text-[#6B6255] mt-2 italic font-sans border-t border-[#DFD7C7] pt-1">
+                    <strong>Rationale:</strong> {selectedNode.statusRationale}
                   </div>
                 </div>
 

@@ -88,6 +88,12 @@ export function computeIncidentAnalytics(incidents: IncidentSummaryItem[]): Inci
 
   const verifiedRecoveryRate = totalIncidents > 0 ? verifiedRecoveries / totalIncidents : 0;
 
+  // MTTR explanation
+  const recoveryDurationExplanation =
+    durationsMs.length > 0
+      ? `Computed from ${durationsMs.length} VERIFIED incident(s) with valid created_at→updated_at durations where updated_at > created_at.`
+      : 'No VERIFIED incidents with valid distinct timestamps found in current sample.';
+
   return {
     totalIncidents,
     verifiedRecoveries,
@@ -96,9 +102,23 @@ export function computeIncidentAnalytics(incidents: IncidentSummaryItem[]): Inci
     pendingApprovals,
     runningCount,
     verifiedRecoveryRate,
-    falseSuccessRate: 0.0, // Strict zero-tolerance: independent verifier guarantees 0.0%
-    policyViolationRate: 0.0, // Enforced deterministically by policy gate
+    // falseSuccessRate cannot be computed from IncidentSummaryItem[] alone.
+    // Requires per-incident verification check records from GET /incidents/{id}/investigation
+    // (remediation_history[].verification_checks), which are not exposed in the aggregate history endpoint.
+    falseSuccessRate: null,
+    falseSuccessExplanation:
+      'Cannot be computed from incident summary list. Requires per-incident verification check records ' +
+      '(GET /incidents/{id}/investigation → remediation_history[].verification_checks) ' +
+      'not available in the GET /incidents aggregate response.',
+    // policyViolationRate cannot be computed from IncidentSummaryItem[] alone.
+    // Requires policy decision event records from the SSE event stream, not the summary list.
+    policyViolationRate: null,
+    policyViolationExplanation:
+      'Cannot be computed from incident summary list. Requires policy decision event records ' +
+      'from the SSE event stream (action_proposed / policy_decision events), ' +
+      'not exposed in the GET /incidents aggregate response.',
     meanTimeToRecoveryMs,
+    recoveryDurationExplanation,
     scenarioBreakdown,
     clientBreakdown,
     outcomeBreakdown,
