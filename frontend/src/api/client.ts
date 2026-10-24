@@ -75,6 +75,10 @@ export async function fetchIncident(incidentId: string): Promise<IncidentRespons
   return request<IncidentResponse>(`/incidents/${encodeURIComponent(incidentId)}`);
 }
 
+export async function fetchInvestigation(incidentId: string): Promise<Record<string, any>> {
+  return request<Record<string, any>>(`/incidents/${encodeURIComponent(incidentId)}/investigation`);
+}
+
 export async function startIncident(
   scenario: string,
   client: string,
