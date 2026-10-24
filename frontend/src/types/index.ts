@@ -359,3 +359,92 @@ export interface PolicyDecisionRecord {
   executionSuccess?: boolean | null;
   verificationPassed?: boolean | null;
 }
+
+
+export interface IncidentAnalyticsSummary {
+  totalIncidents: number;
+  verifiedRecoveries: number;
+  unverifiedOrFailed: number;
+  escalatedCount: number;
+  pendingApprovals: number;
+  runningCount: number;
+  verifiedRecoveryRate: number; // 0.0 - 1.0
+  falseSuccessRate: number; // strict zero-tolerance 0.0
+  policyViolationRate: number; // 0.0 enforced by policy gate
+  meanTimeToRecoveryMs: number | null; // null if timestamps unavailable
+  scenarioBreakdown: Record<string, { total: number; verified: number; escalated: number; failed: number }>;
+  clientBreakdown: Record<string, number>;
+  outcomeBreakdown: Record<Outcome, number>;
+  recentTimeline: Array<{ incident_id: string; scenario: string; outcome: Outcome; timestamp: string }>;
+}
+
+export interface ServiceTopologyNode {
+  id: string;
+  name: string;
+  type: 'service' | 'database' | 'gateway' | 'config' | 'cache' | 'external';
+  status: 'healthy' | 'degraded' | 'failed' | 'unknown';
+  observedLatencyMs?: number;
+  observedErrorRate?: number;
+  isSuspectedRootCause?: boolean;
+  isRemediationTarget?: boolean;
+  evidenceRefs: string[];
+  diagnosticsRun: string[];
+}
+
+export interface ServiceTopologyLink {
+  source: string;
+  target: string;
+  protocol?: string;
+  healthy: boolean;
+  observedErrors?: number;
+}
+
+export interface ServiceTopologyGraph {
+  nodes: ServiceTopologyNode[];
+  links: ServiceTopologyLink[];
+  inferredAt?: string;
+  sourceIncidentId: string;
+}
+
+export interface DatasetEvaluationSummaryItem {
+  evaluation_id: string;
+  dataset_name: string;
+  dataset_version: string;
+  dataset_provenance: string;
+  total_cases: number;
+  timestamp: string;
+  evaluator_version: string;
+  status: 'completed' | 'running' | 'failed';
+  top1_accuracy?: number;
+  top3_accuracy?: number;
+}
+
+export interface DatasetEvaluationDetail {
+  evaluation_id: string;
+  dataset_metadata: {
+    name: string;
+    version: string;
+    license: string;
+    split: string;
+    case_count: number;
+  };
+  aggregate_metrics: {
+    top1_diagnosis_accuracy: { value: number; numerator: number; denominator: number; description: string };
+    top3_diagnosis_accuracy: { value: number; numerator: number; denominator: number; description: string };
+    mean_diagnostic_steps: { value: number; description: string };
+    diagnostic_efficiency_ratio: { value: number; description: string };
+    hallucination_or_unsupported_rate: { value: number; description: string };
+  };
+  category_breakdown: Record<string, { cases: number; accuracy: number }>;
+  cases: Array<{
+    case_id: string;
+    title: string;
+    ground_truth_category: string;
+    predicted_category: string;
+    predicted_hypothesis_title: string;
+    confidence: number;
+    diagnostics_called: string[];
+    match: boolean;
+    explanation?: string;
+  }>;
+}
