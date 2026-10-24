@@ -36,6 +36,7 @@ import { IncidentsView } from './components/IncidentsView';
 import { ApprovalsView } from './components/ApprovalsView';
 import { ActionLifecycleTimeline } from './components/ActionLifecycleTimeline';
 import { PolicyDecisionExplorer } from './components/PolicyDecisionExplorer';
+import { AgentOperationsEngine } from './components/agent-engine/AgentOperationsEngine';
 import { Terminal, Layers, Shield } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -489,6 +490,19 @@ export const App: React.FC = () => {
         isLoading={isLoadingHistory}
       />
     );
+  } else if (activeView === 'agent_engine') {
+    viewContent = (
+      <div className="w-full">
+        <AgentOperationsEngine
+          activeIncident={activeIncident}
+          events={events}
+          investigationState={investigationState}
+          connectionStatus={connectionStatus}
+          isCompact={false}
+          className="w-full"
+        />
+      </div>
+    );
   } else {
     // Default 'operations' view
     viewContent = (
@@ -516,6 +530,16 @@ export const App: React.FC = () => {
               ACTIVE CLIENT POLICY: STANDARD ENFORCEMENT
             </span>
           </div>
+
+          {/* Live 3D Agent Operations Engine Control Surface */}
+          <AgentOperationsEngine
+            activeIncident={activeIncident}
+            events={events}
+            investigationState={investigationState}
+            connectionStatus={connectionStatus}
+            isCompact={true}
+            className="w-full"
+          />
 
           {/* Row 1: Launcher & Active State / Approval Gate */}
           <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
