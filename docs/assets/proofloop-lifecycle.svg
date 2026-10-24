@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+<title id="title">ProofLoop incident lifecycle</title><desc id="desc">Six stages: observe, investigate, authorize, execute in a synthetic simulator, independently verify, and recover or escalate.</desc>
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b1017"/><stop offset="1" stop-color="#151e29"/></linearGradient><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#7e9e9c"/></marker><style>.node{fill:#151f2a;stroke:#3b4c5b;stroke-width:1.5}.gate{fill:#29271f;stroke:#857653;stroke-width:1.5}.done{fill:#172b29;stroke:#537d72;stroke-width:1.5}.head{font:700 16px Arial,sans-serif;fill:#e6edf5}.sub{font:12px Arial,sans-serif;fill:#9aaaba}.arrow{stroke:#7e9e9c;stroke-width:2;fill:none;marker-end:url(#arrow)}</style></defs>
+<rect width="1200" height="300" rx="22" fill="url(#bg)"/>
+<text x="38" y="42" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#e6edf5">The ProofLoop lifecycle</text>
+<g transform="translate(32 82)">
+<rect width="158" height="112" rx="12" class="node"/><text x="79" y="38" text-anchor="middle" class="head">01 · Observe</text><text x="79" y="63" text-anchor="middle" class="sub">Symptoms &amp; signals</text><text x="79" y="82" text-anchor="middle" class="sub">Incident opened</text>
+<path d="M158 56 H184" class="arrow"/>
+<rect x="184" width="158" height="112" rx="12" class="node"/><text x="263" y="38" text-anchor="middle" class="head">02 · Investigate</text><text x="263" y="63" text-anchor="middle" class="sub">Collect evidence</text><text x="263" y="82" text-anchor="middle" class="sub">Rank hypotheses</text>
+<path d="M342 56 H368" class="arrow"/>
+<rect x="368" width="158" height="112" rx="12" class="gate"/><text x="447" y="38" text-anchor="middle" class="head">03 · Authorize</text><text x="447" y="63" text-anchor="middle" class="sub">Policy evaluation</text><text x="447" y="82" text-anchor="middle" class="sub">Allow / approve / block</text>
+<path d="M526 56 H552" class="arrow"/>
+<rect x="552" width="158" height="112" rx="12" class="node"/><text x="631" y="38" text-anchor="middle" class="head">04 · Execute</text><text x="631" y="63" text-anchor="middle" class="sub">Authorized simulator</text><text x="631" y="82" text-anchor="middle" class="sub">Bounded action</text>
+<path d="M710 56 H736" class="arrow"/>
+<rect x="736" width="158" height="112" rx="12" class="node"/><text x="815" y="38" text-anchor="middle" class="head">05 · Verify</text><text x="815" y="63" text-anchor="middle" class="sub">Independent checks</text><text x="815" y="82" text-anchor="middle" class="sub">Observe outcomes</text>
+<path d="M894 56 H920" class="arrow"/>
+<rect x="920" width="158" height="112" rx="12" class="done"/><text x="999" y="38" text-anchor="middle" class="head">06 · Resolve</text><text x="999" y="63" text-anchor="middle" class="sub">Verified, or</text><text x="999" y="82" text-anchor="middle" class="sub">escalate / block</text>
+</g>
+<text x="38" y="238" font-family="Arial,sans-serif" font-size="13" fill="#8fa1b3">Safety invariant: an LLM may recommend; deterministic policy authorizes; independent checks determine recovery.</text>
+</svg>
