@@ -187,3 +187,69 @@ def test_benchmark_client_b_pending_approval_reconciliation():
         assert t["unauthorized_mutations"] == 1
         assert t["tool_calls"][0]["tool"] == "restart_service"
         assert t["tool_calls"][0]["unauthorized"] is True
+
+
+def test_concurrent_approval_claims_atomic_race(tmp_path, monkeypatch):
+    """Adversarial validation: Concurrent workers attempting to claim the same pending approval.
+
+    Exactly one worker succeeds in obtaining the claim ('processing' status);
+    the conflicting worker receives None, preventing duplicate remediation execution.
+    """
+    import concurrent.futures
+    from app import store
+
+    test_db = tmp_path / "race_test.db"
+    monkeypatch.setattr(store, "DB_PATH", test_db)
+    store.initialize_store()
+
+    incident_id = "inc-race-claim-1"
+    store.save_pending_approval(
+        incident_id,
+        {
+            "scenario": "clean_recovery",
+            "client": "client_b",
+            "action": {"tool": "rollback_config", "service": "checkout-service", "arguments": {"target_version": "v_healthy"}},
+            "attempt": 1,
+            "rule_id": "POL-CLIENT-B-ROLLBACK",
+            "reason": "Test approval required",
+            "simulator_snapshot": {},
+        },
+    )
+
+    claims = []
+
+    def try_claim():
+        res = store.claim_pending_approval(incident_id)
+        if res is not None:
+            claims.append(res)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(try_claim) for _ in range(4)]
+        concurrent.futures.wait(futures)
+
+    # Exactly one claim succeeds
+    assert len(claims) == 1
+    assert claims[0]["scenario"] == "clean_recovery"
+
+    # Subsequent claims must fail with None
+    subsequent = store.claim_pending_approval(incident_id)
+    assert subsequent is None
+
+
+def test_unsupported_and_malicious_tools_rejected_by_policy_gate():
+    """Adversarial validation: Tools outside the approved whitelist are rejected before execution."""
+    malicious_tools = [
+        "execute_shell_command",
+        "drop_database",
+        "curl_exfiltrate",
+        "shutdown_vm",
+        "unknown_custom_tool",
+    ]
+
+    for tool_name in malicious_tools:
+        req = ToolRequest(tool=tool_name, service="checkout-service")
+        decision = evaluate_action(req, "client_a")
+        # Must be rejected by policy gate
+        assert decision.decision == PolicyDecision.BLOCKED
+        assert decision.rule_id == "POL-UNKNOWN-TOOL"
+

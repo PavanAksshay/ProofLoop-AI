@@ -306,3 +306,116 @@ async def test_sse_stream_stays_open_on_pending_approval_and_completes_on_termin
     assert "id: 1" in full_output
     assert "id: 2" in full_output
 
+
+def test_investigation_endpoint_returns_typed_state(monkeypatch):
+    """GET /incidents/{id}/investigation returns 200 with typed InvestigationState."""
+    from app.models import InvestigationState, Hypothesis
+    mock_state = InvestigationState(
+        incident_id="inv-contract-1",
+        step=2,
+        hypotheses=[
+            Hypothesis(
+                id="hyp-1",
+                title="Config Mismatch",
+                category="configuration",
+                description="Faulty config version",
+                confidence_score=0.85,
+            )
+        ],
+    )
+    monkeypatch.setattr(store, "get_investigation_state", lambda _id: mock_state)
+
+    with TestClient(main.app) as client:
+        response = client.get("/incidents/inv-contract-1/investigation")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["incident_id"] == "inv-contract-1"
+    assert data["step"] == 2
+    assert len(data["hypotheses"]) == 1
+    assert data["hypotheses"][0]["title"] == "Config Mismatch"
+    assert data["hypotheses"][0]["confidence_score"] == 0.85
+
+
+def test_investigation_endpoint_returns_404_when_no_state_exists(monkeypatch):
+    """GET /incidents/{id}/investigation returns 404 when incident exists but has no investigation state."""
+    mock_incident = _response(incident_id="no-inv-state")
+    mock_incident.investigation_state = None
+    monkeypatch.setattr(store, "get_investigation_state", lambda _id: None)
+    monkeypatch.setattr(main, "get_incident_response", lambda _id: mock_incident)
+    monkeypatch.setattr(main, "get_incident", lambda _id: None)
+
+    with TestClient(main.app) as client:
+        response = client.get("/incidents/no-inv-state/investigation")
+
+    assert response.status_code == 404
+    assert "Investigation state not found" in response.json()["detail"]
+
+
+def test_approval_endpoint_returns_409_on_conflict(monkeypatch):
+    """POST /incidents/{id}/approval returns 409 Conflict when decision is duplicate or in flight."""
+    def raise_conflict(incident_id, request):
+        raise ValueError("This approval is already being processed or has already been resolved.")
+
+    monkeypatch.setattr(main, "decide_approval", raise_conflict)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/incidents/inc-409/approval",
+            json={"decision": "approve", "approver_id": "reviewer-dup"},
+        )
+
+    assert response.status_code == 409
+    assert "already being processed" in response.json()["detail"]
+
+
+def test_approval_endpoint_returns_403_on_policy_rejection(monkeypatch):
+    """POST /incidents/{id}/approval returns 403 Forbidden when policy revalidation rejects action."""
+    def raise_forbidden(incident_id, request):
+        raise PermissionError("Action blocked by policy: unauthorized target.")
+
+    monkeypatch.setattr(main, "decide_approval", raise_forbidden)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/incidents/inc-403/approval",
+            json={"decision": "approve", "approver_id": "reviewer-forbidden"},
+        )
+
+    assert response.status_code == 403
+    assert "Action blocked by policy" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_sse_stream_respects_after_sequence_cursor(monkeypatch):
+    """Ensure GET /events?after=X only emits events with sequence > X."""
+    events_db = [
+        {"sequence": 1, "type": "incident_opened", "payload": {}},
+        {"sequence": 2, "type": "diagnostic_selected", "payload": {}},
+        {"sequence": 3, "type": "outcome", "payload": {"outcome": "VERIFIED"}},
+    ]
+
+    def fake_events_after(incident_id, after):
+        return [row for row in events_db if row["sequence"] > after]
+
+    monkeypatch.setattr(main, "incident_exists", lambda incident_id: True)
+    monkeypatch.setattr(main, "events_after", fake_events_after)
+    monkeypatch.setattr(main, "get_incident_response", lambda incident_id: type("Mock", (), {"outcome": Outcome.VERIFIED})())
+
+    class MockRequest:
+        async def is_disconnected(self):
+            return False
+
+    # Start stream with cursor after=2
+    streaming_response = await main.stream_incident_events(MockRequest(), "cursor-test", after=2)
+    received = []
+    async for chunk in streaming_response.body_iterator:
+        received.append(chunk)
+
+    full_output = "".join(received)
+    assert "id: 1" not in full_output
+    assert "id: 2" not in full_output
+    assert "id: 3" in full_output
+    assert "event: outcome" in full_output
+
+
