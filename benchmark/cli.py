@@ -7,11 +7,90 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from benchmark.dataset_runner import export_report_csv, run_dataset_evaluation
 from benchmark.runner import run_benchmark
 
 
 def format_table_row(col1: str, col2: str, col3: str, col4: str, widths: tuple[int, int, int, int] = (28, 22, 22, 20)) -> str:
     return f"{col1:<{widths[0]}} | {col2:<{widths[1]}} | {col3:<{widths[2]}} | {col4:<{widths[3]}}"
+
+
+def print_dataset_evaluation_summary(result: dict[str, Any]) -> None:
+    """Print an ASCII comparison table of real-world dataset diagnosis evaluation results."""
+    ds = result["dataset"]
+    b_metrics = result["metrics"]["baseline"]
+    pl_metrics = result["metrics"]["proofloop"]
+
+    print("\n" + "=" * 98)
+    print("           PROOFLOOP AI REAL-WORLD DATASET DIAGNOSIS EVALUATION REPORT")
+    print("=" * 98)
+    print(f"Run ID:            {result['run_id']}")
+    print(f"Timestamp:         {result['timestamp']}")
+    print(f"Software Revision: {result['software_revision']}")
+    print(f"Dataset:           {ds['name']} (version: {ds['version']})")
+    print(f"Case Accounting:   {ds['total_cases_loaded']} loaded, {ds['eligible_evaluated_cases']} evaluated, {ds['excluded_cases_count']} excluded, {ds['failed_cases_count']} failed")
+    print("-" * 98)
+
+    widths = (32, 20, 20, 20)
+    print(format_table_row("METRIC", "HEURISTIC BASELINE", "PROOFLOOP AI", "ADVANTAGE / DELTA", widths))
+    print("-" * 98)
+
+    # 1. Top-1 Accuracy
+    b_t1 = f"{b_metrics['top1_accuracy']['value']}% ({b_metrics['top1_accuracy']['numerator']}/{b_metrics['top1_accuracy']['denominator']})"
+    pl_t1 = f"{pl_metrics['top1_accuracy']['value']}% ({pl_metrics['top1_accuracy']['numerator']}/{pl_metrics['top1_accuracy']['denominator']})"
+    delta_t1 = f"+{round(pl_metrics['top1_accuracy']['value'] - b_metrics['top1_accuracy']['value'], 1)}% ProofLoop"
+    print(format_table_row("Top-1 Root-Cause Accuracy", b_t1, pl_t1, delta_t1, widths))
+
+    # 2. Top-3 Accuracy
+    b_t3 = f"{b_metrics['top3_accuracy']['value']}% ({b_metrics['top3_accuracy']['numerator']}/{b_metrics['top3_accuracy']['denominator']})"
+    pl_t3 = f"{pl_metrics['top3_accuracy']['value']}% ({pl_metrics['top3_accuracy']['numerator']}/{pl_metrics['top3_accuracy']['denominator']})"
+    delta_t3 = f"+{round(pl_metrics['top3_accuracy']['value'] - b_metrics['top3_accuracy']['value'], 1)}% ProofLoop"
+    print(format_table_row("Top-3 Root-Cause Accuracy", b_t3, pl_t3, delta_t3, widths))
+
+    # 3. Category / Taxonomy Accuracy
+    b_cat = f"{b_metrics['category_accuracy']['value']}% ({b_metrics['category_accuracy']['numerator']}/{b_metrics['category_accuracy']['denominator']})"
+    pl_cat = f"{pl_metrics['category_accuracy']['value']}% ({pl_metrics['category_accuracy']['numerator']}/{pl_metrics['category_accuracy']['denominator']})"
+    delta_cat = f"+{round(pl_metrics['category_accuracy']['value'] - b_metrics['category_accuracy']['value'], 1)}% ProofLoop"
+    print(format_table_row("Category / Taxonomy Match", b_cat, pl_cat, delta_cat, widths))
+
+    # 4. Avg Diagnostics / Case
+    b_diag = f"{b_metrics.get('avg_diagnostics_per_case', 0.0)}"
+    pl_diag = f"{pl_metrics.get('avg_diagnostics_per_case', 0.0)}"
+    print(format_table_row("Avg Diagnostics / Case", b_diag, pl_diag, "Read-only telemetry", widths))
+
+    # 5. Avg Latency
+    b_lat = f"{b_metrics.get('avg_elapsed_ms', 0.0)} ms"
+    pl_lat = f"{pl_metrics.get('avg_elapsed_ms', 0.0)} ms"
+    print(format_table_row("Avg Diagnosis Latency", b_lat, pl_lat, "Evidence-driven", widths))
+
+    # 6. Evidence Traceability
+    b_tr = f"{b_metrics['evidence_traceability_rate']['value']}%"
+    pl_tr = f"{pl_metrics['evidence_traceability_rate']['value']}%"
+    print(format_table_row("Evidence Traceability", b_tr, pl_tr, "Citation ledger", widths))
+
+    print("-" * 98)
+
+    # Per-case details
+    per_cases = result.get("per_case_evaluation", [])
+    if per_cases:
+        print("\nPER-CASE DIAGNOSIS DETAILS:")
+        print(f"{'CASE ID':<36} | {'GROUND TRUTH CAUSE':<26} | {'PREDICTED TOP-1':<24} | {'TOP-1 MATCH'}")
+        print("-" * 98)
+        for c in per_cases:
+            cid = c.get("case_id", "")
+            gt = c.get("ground_truth_root_cause", "")
+            p1 = c.get("top1_prediction", "None") or "None"
+            m = "PASS" if c.get("top1_match") else "FAIL"
+            print(f"{cid:<36} | {gt:<26} | {p1:<24} | {m}")
+
+    if result.get("excluded_cases"):
+        print("\nEXCLUDED / SKIPPED CASES:")
+        for exc in result["excluded_cases"]:
+            print(f"  • {exc.get('case_id')}: {exc.get('reason')}")
+
+    print("\nDISCLOSURE:")
+    print(f"  {result['disclaimer']}")
+    print("=" * 98 + "\n")
 
 
 def print_benchmark_summary(result: dict[str, Any]) -> None:
@@ -163,9 +242,65 @@ def main() -> None:
         help="Path to save JSON benchmark results",
     )
 
+    parser.add_argument(
+        "--dataset",
+        choices=["cloud_opsbench"],
+        default=None,
+        help="Execute real-world dataset diagnosis evaluation (e.g. cloud_opsbench)",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        default=None,
+        help="Path to dataset directory (containing index.jsonl) or fixture JSON",
+    )
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="Maximum number of cases to evaluate",
+    )
+    parser.add_argument(
+        "--output-csv",
+        default=None,
+        help="Optional path to save per-case CSV evaluation report",
+    )
+
     args = parser.parse_args()
 
-    # Execute benchmark
+    # Branch 1: Real-World Dataset Diagnosis Evaluation
+    if args.dataset:
+        fixture_p = None
+        dir_p = None
+        if args.dataset_path:
+            p = Path(args.dataset_path)
+            if p.is_file():
+                fixture_p = p
+            else:
+                dir_p = p
+
+        result = run_dataset_evaluation(
+            fixture_path=fixture_p,
+            dataset_dir=dir_p,
+            dataset_name=args.dataset,
+            seed=args.seed,
+            max_cases=args.max_cases,
+        )
+
+        print_dataset_evaluation_summary(result)
+
+        if args.output:
+            out_path = Path(args.output).resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+            print(f"Full dataset evaluation JSON written to: {out_path}")
+
+        if args.output_csv:
+            export_report_csv(result, args.output_csv)
+            print(f"Per-case CSV evaluation report written to: {args.output_csv}\n")
+        return
+
+    # Branch 2: Synthetic ServiceSimulator Benchmark
     result = run_benchmark(
         scenarios=args.scenarios,
         client=args.client,

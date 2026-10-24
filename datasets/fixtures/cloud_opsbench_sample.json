@@ -1,0 +1,93 @@
+{
+  "dataset_name": "Cloud-OpsBench",
+  "distribution_version": "v1.0.0",
+  "source_commit": "ea05dafbc87b5985df8721622d63d4229c2b4224",
+  "cases": [
+    {
+      "case_key": "boutique/admission/1",
+      "case_id": "1",
+      "system": "boutique",
+      "category": "admission",
+      "namespace": "boutique",
+      "difficulty": "medium",
+      "query": "Partial Service Unreachability.",
+      "fault_object": "app/adservice",
+      "fault_taxonomy": "Admission_Fault",
+      "root_cause": "missing_service_account",
+      "valid_alternative_labels": ["service_account_not_found", "adservice_admission_failure"],
+      "tool_cache": {
+        "GetResources:{\"resource_type\":\"pods\",\"namespace\":\"boutique\"}": "NAME                           READY   STATUS              RESTARTS   AGE\nadservice-7b5f99c86-x7pl2      0/1     CreateContainerConfigError   0          2m\nfrontend-657dd795f-sxzfc       1/1     Running             0          5m\npaymentservice-78c5996648-jzf  1/1     Running             0          5m\n",
+        "DescribeResource:{\"resource_type\":\"pods\",\"name\":\"adservice-7b5f99c86-x7pl2\",\"namespace\":\"boutique\"}": "Name: adservice-7b5f99c86-x7pl2\nNamespace: boutique\nStatus: Pending\nEvents:\n  Warning  FailedMount  1m  kubelet  MountVolume.SetUp failed for volume \"kube-api-access\": serviceaccount \"adservice\" not found\n",
+        "GetLogs:{\"resource_type\":\"pods\",\"name\":\"adservice-7b5f99c86-x7pl2\",\"namespace\":\"boutique\"}": "Error from server (BadRequest): container \"server\" in pod \"adservice-7b5f99c86-x7pl2\" is waiting to start: CreateContainerConfigError\n"
+      }
+    },
+    {
+      "case_key": "boutique/performance/1",
+      "case_id": "1",
+      "system": "boutique",
+      "category": "performance",
+      "namespace": "boutique",
+      "difficulty": "medium",
+      "query": "Severe latency spike on checkout flow.",
+      "fault_object": "app/cartservice",
+      "fault_taxonomy": "Resource_Throttling",
+      "root_cause": "cpu_limit_throttling",
+      "valid_alternative_labels": ["cpu_starvation", "cartservice_cpu_throttled"],
+      "tool_cache": {
+        "GetMetrics:{\"resource_type\":\"pods\",\"name\":\"cartservice\",\"namespace\":\"boutique\"}": "{\"cpu_usage_m\": 200, \"cpu_limit_m\": 200, \"throttled_time_pct\": 88.5, \"memory_usage_mb\": 95, \"memory_limit_mb\": 256}",
+        "GetLogs:{\"resource_type\":\"pods\",\"name\":\"cartservice\",\"namespace\":\"boutique\"}": "[Warn] Thread starvation detected. Request duration exceeded 4500ms due to CPU quota throttling.\n"
+      }
+    },
+    {
+      "case_key": "boutique/codedefect/1",
+      "case_id": "1",
+      "system": "boutique",
+      "category": "codedefect",
+      "namespace": "boutique",
+      "difficulty": "hard",
+      "query": "Frequent HTTP 500 errors on payment completion.",
+      "fault_object": "app/paymentservice",
+      "fault_taxonomy": "Code_Exception",
+      "root_cause": "null_pointer_exception",
+      "valid_alternative_labels": ["unhandled_type_error", "payment_code_defect"],
+      "tool_cache": {
+        "GetLogs:{\"resource_type\":\"pods\",\"name\":\"paymentservice\",\"namespace\":\"boutique\"}": "ERROR: [ChargeCard] Unhandled exception in transaction handler\nTypeError: Cannot read properties of undefined (reading 'amount')\n    at charge (/src/charge.js:42:15)\n    at ServerCallStream (/src/server.js:88:5)\n",
+        "GetMetrics:{\"resource_type\":\"pods\",\"name\":\"paymentservice\",\"namespace\":\"boutique\"}": "{\"http_5xx_rate\": 0.35, \"http_2xx_rate\": 0.65, \"p99_latency_ms\": 180}"
+      }
+    },
+    {
+      "case_key": "trainticket/runtime/1",
+      "case_id": "1",
+      "system": "trainticket",
+      "category": "runtime",
+      "namespace": "trainticket",
+      "difficulty": "medium",
+      "query": "Train query service failure.",
+      "fault_object": "ts-travel-service",
+      "fault_taxonomy": "Database_Connection_Failure",
+      "root_cause": "connection_pool_exhausted",
+      "valid_alternative_labels": ["database_timeout", "hikari_pool_starvation"],
+      "tool_cache": {
+        "GetLogs:{\"resource_type\":\"pods\",\"name\":\"ts-travel-service\",\"namespace\":\"trainticket\"}": "ERROR [ts-travel-service] Cannot get connection from pool: HikariPool-1 - Connection is not available, request timed out after 30000ms.\nSQLTransientConnectionException: HikariPool-1 - Connection is not available\n",
+        "GetMetrics:{\"resource_type\":\"pods\",\"name\":\"ts-travel-service\",\"namespace\":\"trainticket\"}": "{\"active_connections\": 50, \"max_pool_size\": 50, \"pending_connection_requests\": 142}"
+      }
+    },
+    {
+      "case_key": "boutique/scheduling/1",
+      "case_id": "1",
+      "system": "boutique",
+      "category": "scheduling",
+      "namespace": "boutique",
+      "difficulty": "easy",
+      "query": "New replicas failing to deploy.",
+      "fault_object": "app/emailservice",
+      "fault_taxonomy": "Scheduling_Failure",
+      "root_cause": "insufficient_memory",
+      "valid_alternative_labels": ["node_out_of_memory", "scheduling_resource_exhaustion"],
+      "tool_cache": {
+        "DescribeResource:{\"resource_type\":\"pods\",\"name\":\"emailservice-abcde\",\"namespace\":\"boutique\"}": "Events:\n  Warning  FailedScheduling  default-scheduler  0/3 nodes are available: 3 Insufficient memory.\n",
+        "GetResources:{\"resource_type\":\"pods\",\"namespace\":\"boutique\"}": "NAME                           READY   STATUS    RESTARTS   AGE\nemailservice-abcde             0/1     Pending   0          10m\n"
+      }
+    }
+  ]
+}

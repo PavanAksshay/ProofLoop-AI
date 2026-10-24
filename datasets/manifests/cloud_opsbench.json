@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "dataset_name": "Cloud-OpsBench",
+  "provenance": {
+    "source_repository": "https://github.com/LLM4Ops/Cloud-OpsBench",
+    "distribution_url": "https://huggingface.co/datasets/LLM4Ops/Cloud-OpsBench",
+    "distribution_version": "v1.0.0",
+    "source_commit": "ea05dafbc87b5985df8721622d63d4229c2b4224",
+    "source_commit_time": "2026-10-06T16:29:15+08:00",
+    "verified_license": "MIT License",
+    "license_verification_status": "verified",
+    "authors": [
+      "Yilun Wang",
+      "Guangba Yu",
+      "Haiyu Huang",
+      "Yujie Huang",
+      "Zirui Wang",
+      "Pengfei Chen",
+      "Michael R. Lyu"
+    ],
+    "citations": [
+      "arXiv:2603.00468",
+      "ACM FSE 2026 (pages 1733-1737)"
+    ]
+  },
+  "distribution_integrity": {
+    "case_count": 754,
+    "data_file_count": 27104,
+    "data_size_bytes": 3834800752,
+    "source_tree_ids": {
+      "benchmark": "05374aec478145dadc1ca97db8dbb5b1335c6e03",
+      "golden-trajectory": "1e2c5a54b6cf0a3affdd66fb226d9b220501a343",
+      "process-label": "8ed07209857ff3db3756b6407272128e9c00980d"
+    },
+    "cases_by_system": {
+      "boutique": 550,
+      "trainticket": 204
+    },
+    "cases_by_system_category": {
+      "boutique/admission": 58,
+      "boutique/codedefect": 98,
+      "boutique/infrastructure": 40,
+      "boutique/performance": 29,
+      "boutique/runtime": 45,
+      "boutique/scheduling": 164,
+      "boutique/service": 54,
+      "boutique/startup": 62,
+      "trainticket/performance": 47,
+      "trainticket/runtime": 96,
+      "trainticket/service": 37,
+      "trainticket/startup": 24
+    }
+  },
+  "schema_mapping": {
+    "index_file": "index.jsonl",
+    "field_mapping": {
+      "case_key": "Unique compound key: <system>/<category>/<case_id>",
+      "case_id": "Numeric string identifier within category",
+      "system": "Workload application ('boutique' or 'trainticket')",
+      "category": "Fault category domain (e.g. 'admission', 'codedefect', 'scheduling', 'performance')",
+      "difficulty": "Incident complexity ('easy', 'medium', 'hard')",
+      "query": "Observed symptom description provided to operator / agent",
+      "namespace": "Kubernetes target namespace",
+      "fault_taxonomy": "[Evaluator Only] Formal fault type taxonomy",
+      "fault_object": "[Evaluator Only] Kubernetes resource path of failure (e.g. 'app/adservice')",
+      "root_cause": "[Evaluator Only] Ground-truth root cause identifier",
+      "tool_cache_path": "Path to pre-recorded read-only tool responses (kubectl, metrics, logs)",
+      "metadata_path": "Path to per-case metadata",
+      "milestone_path": "[Evaluator Only] Path to milestone annotations",
+      "trajectory_paths": "[Evaluator Only] Paths to expert golden trajectories"
+    }
+  },
+  "retrieval_instructions": {
+    "huggingface_hub_python": "from huggingface_hub import snapshot_download; snapshot_download('LLM4Ops/Cloud-OpsBench', repo_type='dataset', local_dir='datasets/downloaded/cloud_opsbench')",
+    "git_lfs": "git clone https://huggingface.co/datasets/LLM4Ops/Cloud-OpsBench datasets/downloaded/cloud_opsbench"
+  },
+  "known_limitations": [
+    "State Snapshot Paradigm: Evidence is frozen at the moment of incident observation. Dynamic cluster mutation responses are not supported without a live Kubernetes cluster.",
+    "Scope: Workloads are limited to Online Boutique and Train-Ticket microservices.",
+    "Split Policy: Upstream releases all 754 incidents in a single benchmark split without predefined train/val/test partitions."
+  ]
+}
