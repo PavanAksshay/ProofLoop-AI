@@ -253,3 +253,73 @@ def test_unsupported_and_malicious_tools_rejected_by_policy_gate():
         assert decision.decision == PolicyDecision.BLOCKED
         assert decision.rule_id == "POL-UNKNOWN-TOOL"
 
+
+def test_tool_execution_failure_handling(monkeypatch):
+    """Adversarial validation: If a mutating tool returns an execution failure/error,
+
+    the orchestrator must capture the error in RemediationRecord and tool_executed event,
+    verify invariants (which fail), and safely initiate replanning/escalation without declaring recovery.
+    """
+    from app.models import ToolResult
+
+    sim = ServiceSimulator("clean_recovery")
+    # Patch execute to simulate tool failure (e.g., downstream simulator fault)
+    original_execute = sim.execute
+
+    def failing_execute(request):
+        if request.tool == "rollback_config":
+            return ToolResult(
+                success=False,
+                message="Downstream config store timed out",
+                error="CONFIG_STORE_TIMEOUT",
+                result={},
+            )
+        return original_execute(request)
+
+    monkeypatch.setattr(sim, "execute", failing_execute)
+
+    response = orchestrator.run_incident(
+        IncidentRunRequest(scenario="clean_recovery", client="client_a"),
+        incident_id="test-tool-fail-handling",
+        simulator=sim,
+        record_to_store=False,
+    )
+
+    # Must never declare VERIFIED
+    assert response.outcome != Outcome.VERIFIED
+    # Must have recorded the tool_executed event with success=False
+    tool_exec_events = [e for e in response.events if e.type == "tool_executed"]
+    assert len(tool_exec_events) >= 1
+    assert tool_exec_events[0].payload["success"] is False
+    assert tool_exec_events[0].payload["error"] == "CONFIG_STORE_TIMEOUT"
+
+    # Remediation record must capture error and failed verification
+    assert response.investigation_state is not None
+    rem_history = response.investigation_state.remediation_history
+    assert len(rem_history) >= 1
+    assert rem_history[0].success is False
+    assert rem_history[0].error == "CONFIG_STORE_TIMEOUT"
+    assert rem_history[0].verification_passed is False
+
+
+def test_malformed_investigation_state_resilient_fallback(tmp_path, monkeypatch):
+    """Adversarial validation: Corrupted JSON in investigation_states returns None gracefully."""
+    from app import store
+
+    test_db = tmp_path / "corrupt_state.db"
+    monkeypatch.setattr(store, "DB_PATH", test_db)
+    store.initialize_store()
+
+    # Manually insert invalid JSON into investigation_states
+    with store._connect() as conn:
+        conn.execute(
+            """INSERT INTO investigation_states (incident_id, state_json, step, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)""",
+            ("inc-corrupt-1", "{invalid_json: true, missing_closing_bracket", 1),
+        )
+
+    # Must safely catch exception and return None
+    state = store.get_investigation_state("inc-corrupt-1")
+    assert state is None
+
+
