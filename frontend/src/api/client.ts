@@ -8,6 +8,7 @@ import {
   IncidentResponse,
   IncidentStartResponse,
   IncidentSummaryItem,
+  InvestigationState,
   ScenariosResponse,
 } from '../types';
 
@@ -71,12 +72,13 @@ export async function fetchIncidents(limit = 50): Promise<IncidentSummaryItem[]>
   return data.incidents || [];
 }
 
-export async function fetchIncident(incidentId: string): Promise<IncidentResponse> {
-  return request<IncidentResponse>(`/incidents/${encodeURIComponent(incidentId)}`);
+
+export async function fetchInvestigation(incidentId: string): Promise<InvestigationState> {
+  return request<InvestigationState>(`/incidents/${encodeURIComponent(incidentId)}/investigation`);
 }
 
-export async function fetchInvestigation(incidentId: string): Promise<Record<string, any>> {
-  return request<Record<string, any>>(`/incidents/${encodeURIComponent(incidentId)}/investigation`);
+export async function fetchIncident(incidentId: string): Promise<IncidentResponse> {
+  return request<IncidentResponse>(`/incidents/${encodeURIComponent(incidentId)}`);
 }
 
 export async function startIncident(

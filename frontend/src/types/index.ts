@@ -21,6 +21,120 @@ export interface Event {
   evidence_refs: string[];
 }
 
+export type HypothesisStatus = 'active' | 'confirmed' | 'refuted' | 'inconclusive';
+
+export interface Hypothesis {
+  id: string;
+  title: string;
+  description: string;
+  category?: string;
+  confidence_score?: number;
+  supporting_evidence_ids: string[];
+  contradicting_evidence_ids: string[];
+  status: HypothesisStatus;
+  required_evidence?: string[];
+  applicable_diagnostics?: string[];
+  last_ranking_change_reason?: string | null;
+  uncertainty_notes?: string | null;
+  suggested_diagnostic?: string | null;
+  suggested_remediation?: ProposedActionPayload | null;
+}
+
+export type EvidenceKind =
+  | 'direct_observation'
+  | 'derived_measurement'
+  | 'diagnostic_result'
+  | 'inference'
+  | 'contradictory';
+
+export interface EvidenceItem {
+  id: string;
+  source: string;
+  kind: EvidenceKind;
+  summary: string;
+  data: Record<string, any>;
+  timestamp: string;
+}
+
+export interface DiagnosticProposal {
+  tool: string;
+  service: string;
+  arguments: Record<string, any>;
+  rationale: string;
+  target_hypotheses: string[];
+  expected_information_value?: number;
+  distinguishing_power?: string;
+}
+
+export interface DiagnosticResult {
+  tool: string;
+  service: string;
+  arguments: Record<string, any>;
+  success: boolean;
+  data: Record<string, any>;
+  error?: string | null;
+  timestamp: string;
+}
+
+export interface DiagnosisUpdate {
+  diagnosis?: string | null;
+  confidence?: number;
+  confidence_basis: string;
+  leading_hypothesis_id?: string | null;
+  unresolved_uncertainties: string[];
+}
+
+export interface RemediationRecord {
+  id: string;
+  tool: string;
+  service: string;
+  arguments: Record<string, any>;
+  attempt: number;
+  success: boolean;
+  originating_hypothesis_id?: string | null;
+  supporting_evidence_ids: string[];
+  policy_decision?: string | null;
+  policy_rule_id?: string | null;
+  approver_id?: string | null;
+  execution_result: Record<string, any>;
+  error?: string | null;
+  resulting_observations?: Record<string, any>;
+  verification_passed?: boolean | null;
+  verification_checks: Array<Record<string, any>>;
+  replanning_reason?: string | null;
+  timestamp: string;
+}
+
+export interface InvestigationBudget {
+  max_steps: number;
+  max_diagnostics: number;
+  max_remediations: number;
+  steps_taken: number;
+  diagnostics_run: number;
+  remediations_attempted: number;
+  remediations_proposed: number;
+  remediations_blocked: number;
+  remediations_pending_approval: number;
+}
+
+export interface InvestigationState {
+  incident_id: string;
+  symptoms: string[];
+  step: number;
+  hypotheses: Hypothesis[];
+  evidence: EvidenceItem[];
+  diagnostics_performed: DiagnosticResult[];
+  outstanding_uncertainties: string[];
+  current_diagnosis?: DiagnosisUpdate | null;
+  proposed_next_step?: DiagnosticProposal | ProposedActionPayload | null;
+  remediation_history: RemediationRecord[];
+  budget: InvestigationBudget;
+  termination_reason?: string | null;
+  replanning_cycle: number;
+  last_evaluation_summary?: string | null;
+  escalation_reason?: string | null;
+}
+
 export interface IncidentResponse {
   incident_id: string;
   scenario: string;
@@ -29,6 +143,7 @@ export interface IncidentResponse {
   summary: string;
   mode: string;
   events: Event[];
+  investigation_state?: InvestigationState | null;
 }
 
 export interface IncidentSummaryItem {
@@ -184,3 +299,63 @@ export interface BenchmarkRunResponse {
   error_message?: string;
 }
 
+export interface ActionDetail {
+  actionId?: string;
+  tool: string;
+  service?: string;
+  arguments?: Record<string, any>;
+  incidentId?: string;
+  attempt?: number;
+  investigationStep?: number;
+  rationale?: string;
+  supportingEvidenceRefs?: string[];
+  policyDecision?: PolicyDecision | 'REVALIDATION_FAILED' | null;
+  policyRuleId?: string | null;
+  policyReason?: string | null;
+  approvalRequired?: boolean;
+  approvalState?: 'pending' | 'approved' | 'denied' | 'none' | null;
+  approverId?: string | null;
+  approvalComment?: string | null;
+  executionStatus?: 'not_started' | 'running' | 'success' | 'failed' | null;
+  executionResult?: Record<string, any> | null;
+  executionError?: string | null;
+  verificationOutcome?: 'pending' | 'passed' | 'failed' | 'inconclusive' | null;
+  verificationChecks?: VerificationCheck[];
+  timestamp?: string;
+  actor?: Actor;
+  expectedImpact?: string | null;
+  reversibility?: string | null;
+}
+
+export type LifecycleStageKey =
+  | 'proposal'
+  | 'policy'
+  | 'approval'
+  | 'execution'
+  | 'verification'
+  | 'outcome';
+
+export interface LifecycleStage {
+  key: LifecycleStageKey;
+  label: string;
+  status: 'passed' | 'failed' | 'blocked' | 'rejected' | 'pending' | 'skipped' | 'active' | 'inconclusive';
+  timestamp?: string;
+  actor?: Actor;
+  summary: string;
+  details?: Record<string, any>;
+  evidenceRefs?: string[];
+}
+
+export interface PolicyDecisionRecord {
+  ruleId: string;
+  decision: PolicyDecision | 'REVALIDATION_FAILED';
+  reason: string;
+  actionTool: string;
+  actionService?: string;
+  arguments?: Record<string, any>;
+  incidentId?: string;
+  timestamp?: string;
+  evidenceRefs?: string[];
+  executionSuccess?: boolean | null;
+  verificationPassed?: boolean | null;
+}
