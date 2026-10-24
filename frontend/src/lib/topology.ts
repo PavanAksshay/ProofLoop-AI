@@ -1,16 +1,64 @@
 import { InvestigationState, ServiceTopologyGraph, ServiceTopologyNode, ServiceTopologyLink, ProvenanceKind } from '../types';
 
 /**
+ * Normalizes a text string into a recognizable canonical service ID if one matches.
+ */
+function matchServiceId(text: string): string | null {
+  if (!text) return null;
+  const t = text.toLowerCase();
+  if (t.includes('checkout')) return 'checkout-service';
+  if (t.includes('postgres') || t.includes('database') || t.includes('db:') || t.includes('db_') || t.includes('to db')) return 'database';
+  if (t.includes('auth')) return 'auth-service';
+  if (t.includes('gateway') || t.includes('edge')) return 'edge-gateway';
+  if (t.includes('config') || t.includes('etcd')) return 'config-store';
+  return null;
+}
+
+/**
+ * Searches text for a target service reference other than the source service.
+ */
+function findTargetServiceInText(text: string, sourceServiceId: string, knownServiceIds: string[]): string | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+
+  for (const known of knownServiceIds) {
+    if (known === sourceServiceId) continue;
+    if (known === 'database' && (lower.includes('to db') || lower.includes('database') || lower.includes('postgres') || lower.includes('db:5432'))) {
+      return 'database';
+    }
+    if (known === 'checkout-service' && lower.includes('checkout')) {
+      return 'checkout-service';
+    }
+    if (known === 'auth-service' && lower.includes('auth')) {
+      return 'auth-service';
+    }
+    if (known === 'edge-gateway' && (lower.includes('gateway') || lower.includes('edge'))) {
+      return 'edge-gateway';
+    }
+    if (known === 'config-store' && (lower.includes('config') || lower.includes('etcd'))) {
+      return 'config-store';
+    }
+    if (lower.includes(known.toLowerCase())) {
+      return known;
+    }
+  }
+  return null;
+}
+
+/**
  * Synthesizes a deterministic Service Topology Graph from observed incident telemetry,
  * diagnostic tool records, remediation targets, and verified invariant checks.
  *
  * Integrity rules:
  * - Only nodes with direct evidence, diagnostic execution, or remediation targeting are included.
  * - No standard/default topology nodes are added unconditionally.
+ * - Co-occurrence of two service names alone does NOT establish a dependency relationship.
+ * - Edges are created ONLY when specific evidence or an explicit hypothesis supports the relationship.
+ * - Network protocols are never fabricated (protocol is null unless directly observed in telemetry).
  * - A successful diagnostic call does NOT imply service health — status stays 'unknown'
  *   unless an error occurred (degraded) or independent verification passed (healthy).
- * - All inter-service links are provenance:'inferred' with protocol:null.
- * - node.provenance is 'observed' when direct evidence or diagnostics exist, 'inferred' otherwise.
+ * - Only authoritative independent recovery verification (verification_passed === true) confirms health.
+ * - All relationships preserve provenance and supporting evidence references.
  * - hasSufficientTelemetry is true when at least one node was built from real telemetry.
  */
 export function inferServiceTopology(
@@ -53,7 +101,7 @@ export function inferServiceTopology(
   };
 
   // 1. Ingest diagnostics performed
-  // A diagnostic execution is direct observation of the service being probed.
+  // Diagnostic execution is direct observation of the probed service.
   // Success means the probe ran without error — it does NOT mean the service is healthy.
   for (const diag of investigation.diagnostics_performed || []) {
     const serviceName = diag.service || 'core-service';
@@ -72,8 +120,6 @@ export function inferServiceTopology(
       node.status = 'degraded';
       node.statusRationale = `Diagnostic tool '${diag.tool}' reported error: ${diag.error || 'unknown error'}.`;
     } else {
-      // Probe ran without error — this tells us the probe succeeded, NOT that the service is healthy.
-      // Status stays 'unknown' unless later overridden by verification evidence.
       if (node.status === 'unknown') {
         node.statusRationale = `Diagnostic tool '${diag.tool}' executed without error. Health not independently verified.`;
       }
@@ -81,17 +127,9 @@ export function inferServiceTopology(
   }
 
   // 2. Ingest evidence items
-  // Evidence from a named source is treated as 'observed' provenance for that service.
   for (const ev of investigation.evidence || []) {
     const src = ev.source || '';
-    let serviceId: string | null = null;
-
-    if (src.includes('checkout')) serviceId = 'checkout-service';
-    else if (src.includes('db') || src.includes('database') || src.includes('postgres')) serviceId = 'database';
-    else if (src.includes('auth')) serviceId = 'auth-service';
-    else if (src.includes('gateway')) serviceId = 'edge-gateway';
-    else if (src.includes('config')) serviceId = 'config-store';
-    // If source doesn't match a recognizable service pattern, skip rather than invent 'core-service'
+    const serviceId = matchServiceId(src);
     if (!serviceId) continue;
 
     const type: ServiceTopologyNode['type'] = serviceId === 'database'
@@ -125,7 +163,6 @@ export function inferServiceTopology(
     node.isRemediationTarget = true;
 
     if (rem.verification_passed === true) {
-      // Independent verifier confirmed recovery — this is a strong health signal.
       node.status = 'healthy';
       node.provenance = 'observed';
       node.statusRationale = 'Independent recovery verifier confirmed service health post-remediation.';
@@ -154,61 +191,87 @@ export function inferServiceTopology(
     }
   }
 
-  // 5. Build inferred dependency links between co-occurring nodes
-  // All links are inferred from co-occurrence, not directly observed.
-  // Protocol is null because we have no ground-truth protocol information.
+  // 5. Build evidence-backed dependency links
+  // Co-occurrence alone NEVER produces an edge.
+  // An edge is established ONLY when evidence or a hypothesis explicitly supports the relationship.
   const links: ServiceTopologyLink[] = [];
-  const inferredLinkRationale = 'Inferred from co-occurrence in telemetry — not directly observed.';
+  const knownServiceIds = Array.from(nodeMap.keys());
 
-  if (nodeMap.has('edge-gateway') && nodeMap.has('checkout-service')) {
-    links.push({
-      source: 'edge-gateway',
-      target: 'checkout-service',
-      provenance: 'inferred',
-      protocol: null,
-      healthy: nodeMap.get('checkout-service')?.status !== 'failed',
-      rationale: inferredLinkRationale,
-    });
+  const addOrUpdateLink = (
+    source: string,
+    target: string,
+    provenance: 'inferred' | 'observed',
+    rationale: string,
+    evidenceRef?: string,
+    protocol?: string | null
+  ) => {
+    if (source === target) return;
+    if (!nodeMap.has(source) || !nodeMap.has(target)) return;
+
+    const existing = links.find((l) => l.source === source && l.target === target);
+    if (existing) {
+      if (evidenceRef && !existing.evidenceRefs.includes(evidenceRef)) {
+        existing.evidenceRefs.push(evidenceRef);
+      }
+    } else {
+      links.push({
+        source,
+        target,
+        provenance,
+        protocol: protocol || null,
+        healthy: nodeMap.get(target)?.status !== 'failed',
+        rationale,
+        evidenceRefs: evidenceRef ? [evidenceRef] : [],
+      });
+    }
+  };
+
+  // 5A: Inspect evidence items for explicit cross-service references
+  for (const ev of investigation.evidence || []) {
+    const sourceService = matchServiceId(ev.source || '') || (ev.data?.service ? matchServiceId(ev.data.service) : null);
+    if (!sourceService || !nodeMap.has(sourceService)) continue;
+
+    // Check if evidence summary or data mentions another known service
+    const targetService = findTargetServiceInText(
+      `${ev.summary || ''} ${ev.data?.target_service || ''} ${ev.data?.remote_host || ''}`,
+      sourceService,
+      knownServiceIds
+    );
+
+    if (targetService) {
+      const protocol = ev.data?.protocol || null;
+      addOrUpdateLink(
+        sourceService,
+        targetService,
+        'inferred',
+        `Evidence '${ev.id}' indicates dependency from ${sourceService} to ${targetService}: "${ev.summary}".`,
+        ev.id,
+        protocol
+      );
+    }
   }
-  if (nodeMap.has('checkout-service') && nodeMap.has('database')) {
-    links.push({
-      source: 'checkout-service',
-      target: 'database',
-      provenance: 'inferred',
-      protocol: null,
-      healthy: nodeMap.get('database')?.status !== 'failed',
-      rationale: inferredLinkRationale,
-    });
-  }
-  if (nodeMap.has('checkout-service') && nodeMap.has('config-store')) {
-    links.push({
-      source: 'checkout-service',
-      target: 'config-store',
-      provenance: 'inferred',
-      protocol: null,
-      healthy: nodeMap.get('config-store')?.status !== 'failed',
-      rationale: inferredLinkRationale,
-    });
-  }
-  if (nodeMap.has('edge-gateway') && nodeMap.has('auth-service')) {
-    links.push({
-      source: 'edge-gateway',
-      target: 'auth-service',
-      provenance: 'inferred',
-      protocol: null,
-      healthy: nodeMap.get('auth-service')?.status !== 'failed',
-      rationale: inferredLinkRationale,
-    });
-  }
-  if (nodeMap.has('auth-service') && nodeMap.has('database')) {
-    links.push({
-      source: 'auth-service',
-      target: 'database',
-      provenance: 'inferred',
-      protocol: null,
-      healthy: nodeMap.get('database')?.status !== 'failed',
-      rationale: inferredLinkRationale,
-    });
+
+  // 5B: Inspect hypotheses for explicit cross-service dependency formulations
+  for (const hyp of investigation.hypotheses || []) {
+    const text = `${hyp.title || ''} ${hyp.description || ''}`;
+    // Find potential source and target
+    for (const s1 of knownServiceIds) {
+      const s2 = findTargetServiceInText(text, s1, knownServiceIds);
+      if (s2 && s1 !== s2) {
+        // Only add if no link already exists between these services
+        const alreadyLinked = links.some((l) => (l.source === s1 && l.target === s2) || (l.source === s2 && l.target === s1));
+        if (!alreadyLinked) {
+          addOrUpdateLink(
+            s1,
+            s2,
+            'inferred',
+            `Hypothesis '${hyp.id}' posits interaction between ${s1} and ${s2}: "${hyp.title}". Not directly observed in network telemetry.`,
+            hyp.supporting_evidence_ids?.[0],
+            null
+          );
+        }
+      }
+    }
   }
 
   const hasSufficientTelemetry = nodeMap.size > 0;

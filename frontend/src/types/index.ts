@@ -410,6 +410,7 @@ export interface ServiceTopologyLink {
   healthy: boolean;
   observedErrors?: number;
   rationale: string;
+  evidenceRefs: string[];
 }
 
 export interface ServiceTopologyGraph {

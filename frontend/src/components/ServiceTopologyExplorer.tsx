@@ -215,45 +215,71 @@ export const ServiceTopologyExplorer: React.FC<ServiceTopologyExplorerProps> = (
             })}
           </div>
 
-          {/* Inferred Dependency Links List */}
+          {/* Evidence-Backed Dependency Links List */}
           <div className="mt-4 pt-4 border-t border-[#DFD7C7]">
             <span className="font-mono text-xs font-bold text-[#1C1917] block mb-2">
-              Inferred Service Dependencies & Data Flow:
+              Evidence-Backed Service Dependencies &amp; Data Flow:
             </span>
-            <div className="flex flex-col gap-1.5">
-              {graph.links.map((link, idx) => (
-                <div
-                  key={idx}
-                  className="p-2 bg-[#FAF6F0] border border-[#DFD7C7] font-mono text-xs flex items-center justify-between gap-2"
-                >
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-[#1C1917]">{link.source}</span>
-                    <ArrowRight className="w-3.5 h-3.5 text-[#827869]" />
-                    <span className="font-bold text-[#1C1917]">{link.target}</span>
-                    <span
-                      className={`badge text-[9px] uppercase ${
-                        link.provenance === 'observed' ? 'badge-cyan' : 'badge-amber'
-                      }`}
-                    >
-                      {link.provenance} link
-                    </span>
-                    {link.protocol && (
-                      <span className="badge badge-synthetic text-[9px]">
-                        {link.protocol}
+            {graph.links.length === 0 ? (
+              <div className="p-4 bg-[#FAF6F0] border border-[#DFD7C7] text-xs font-mono text-[#827869] text-center" data-testid="no-inferred-links">
+                No direct cross-service dependency evidence recorded in telemetry. Services were observed independently without cross-service interactions.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {graph.links.map((link, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2.5 bg-[#FAF6F0] border border-[#DFD7C7] font-mono text-xs flex flex-col gap-1.5"
+                    data-testid={`topology-link-${link.source}-${link.target}`}
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-[#1C1917]">{link.source}</span>
+                        <ArrowRight className="w-3.5 h-3.5 text-[#827869]" />
+                        <span className="font-bold text-[#1C1917]">{link.target}</span>
+                        <span
+                          className={`badge text-[9px] uppercase ${
+                            link.provenance === 'observed' ? 'badge-cyan' : 'badge-amber'
+                          }`}
+                        >
+                          {link.provenance} link
+                        </span>
+                        {link.protocol && (
+                          <span className="badge badge-synthetic text-[9px]">
+                            {link.protocol}
+                          </span>
+                        )}
+                      </div>
+                      <span
+                        className={`badge text-[10px] ${
+                          link.healthy ? 'badge-emerald' : 'badge-rose'
+                        }`}
+                      >
+                        {link.healthy ? 'HEALTHY' : 'DEGRADED'}
                       </span>
+                    </div>
+                    <div className="text-[11px] text-[#6B6255] italic">
+                      {link.rationale}
+                    </div>
+                    {link.evidenceRefs && link.evidenceRefs.length > 0 && (
+                      <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-[#6B6255] border-t border-[#ECE6DC] pt-1 mt-0.5">
+                        <span className="font-bold">Supporting Evidence:</span>
+                        {link.evidenceRefs.map((evId) => (
+                          <button
+                            key={evId}
+                            type="button"
+                            onClick={() => onSelectEvidence?.(evId)}
+                            className="badge badge-synthetic text-[9px] hover:bg-[#1C1917] hover:text-[#FAF6F0] cursor-pointer"
+                          >
+                            {evId}
+                          </button>
+                        ))}
+                      </div>
                     )}
                   </div>
-                  <span
-                    className={`badge text-[10px] ${
-                      link.healthy ? 'badge-emerald' : 'badge-rose'
-                    }`}
-                    title={link.rationale}
-                  >
-                    {link.healthy ? 'HEALTHY' : 'DEGRADED'}
-                  </span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

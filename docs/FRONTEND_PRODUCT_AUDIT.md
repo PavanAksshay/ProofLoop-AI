@@ -66,32 +66,46 @@ The frontend communicates with a FastAPI backend (`http://127.0.0.1:8000` / `800
 The following product capabilities are **not** supported by native backend endpoints:
 
 1. **Dedicated Analytics Aggregations Endpoint (`GET /analytics/summary`)**:
-   - **Gap**: There is no server-side endpoint calculating historical false-success rate, mean time to recovery (MTTR), or policy violation aggregates across all historical incidents.
-   - **Frontend Resolution**: Compute rigorous, typed aggregations in the frontend directly from `GET /incidents?limit=200` and individual incident records. Missing timestamps or unavailable fields are treated explicitly as "Unavailable" rather than fabricated.
-   - **Contract Recommendation for Backend**: `GET /api/v1/analytics/overview` returning pre-calculated windowed metrics.
+   - **Gap**: There is no server-side endpoint calculating historical false-success rate, mean time to recovery (MTTR), or policy violation aggregates across all historical incidents. Furthermore, the `GET /incidents` summary endpoint does not expose per-incident verification check records (`remediation_history[].verification_checks`) or SSE policy decision history.
+   - **Frontend Resolution & Integrity Rules**:
+     - `falseSuccessRate` is explicitly set to `null` with a clear explanation (`"Cannot be computed from incident summary list..."`). It is displayed as `UNAVAILABLE` rather than fabricating `0.0%`.
+     - `policyViolationRate` is explicitly set to `null` with an explanation because decision events are only streamed via SSE. It is displayed as `UNAVAILABLE` rather than fabricating `0.0%`.
+     - MTTR is computed exclusively for `VERIFIED` incidents with valid distinct timestamps where `updated_at > created_at`. Reversed, zero-duration, or unverified records are excluded.
+   - **Contract Recommendation for Backend**: `GET /api/v1/analytics/overview` returning pre-calculated windowed metrics with explicit numerators and denominators.
 
 2. **Dedicated Service Topology Endpoint (`GET /topology` or `GET /services/graph`)**:
    - **Gap**: The backend does not maintain an explicit static service dependency graph API.
-   - **Frontend Resolution**: Implement a deterministic **Service Topology & Root-Cause Explorer** component that synthesizes the service architecture dynamically from observed events, diagnostic tool targets (`checkout-service`, `auth-service`, `database`, `payment-gateway`), and hypothesis targets. If an incident has no service telemetry, render an honest "Topology Unavailable" state.
-   - **Contract Recommendation for Backend**: `GET /incidents/{id}/topology` returning nodes (services) and directed edges (dependencies, latency, error states).
+   - **Frontend Resolution & Integrity Rules**:
+     - Dynamic synthesis builds nodes only from direct evidence, diagnostic execution, or remediation targets.
+     - No default/standard nodes (e.g. `edge-gateway`, `checkout-service`) are unconditionally injected.
+     - **Co-occurrence alone never creates an edge**: Unrelated co-occurring services produce zero dependency links.
+     - Links are created only when specific evidence or an explicit hypothesis supports cross-service interaction.
+     - Network protocols are never fabricated (`protocol: null`).
+     - A successful diagnostic probe does not assert service health (status stays `unknown`).
+     - Service health is marked `healthy` only upon independent recovery verification (`verification_passed === true`).
+     - If an incident has no service telemetry, an honest `hasSufficientTelemetry: false` state is rendered.
+   - **Contract Recommendation for Backend**: `GET /incidents/{id}/topology` returning verified nodes and observed network traces.
 
 3. **Phase 5 Real-Dataset Evaluation Endpoint**:
    - **Gap**: Pavan is currently writing this engine on `feat/phase5-dataset-evaluation`.
-   - **Frontend Resolution**: Build a cleanly isolated interface (`BenchmarkLab`) with a dedicated tab for "Real Dataset Evaluation (Phase 5)" displaying documented integration points, typed schemas, and clear separation from synthetic simulator trials.
+   - **Frontend Resolution**: Built a cleanly isolated interface (`BenchmarkLab`) with a dedicated tab for "Real Dataset Evaluation (Phase 5)" displaying documented integration points, typed schemas, and clear separation from synthetic simulator trials. A preview fixture is provided with an explicit development-only banner.
 
 ---
 
-## 4. Components to Reuse & Upgrade
+## 4. Components Implemented & Reused
 
 - **`IncidentLauncher.tsx`**: Retain as core scenario simulation trigger.
 - **`ApprovalCard.tsx`**: Retain for atomic safety gate approvals.
 - **`VerificationPanel.tsx`**: Retain as primary proof-of-recovery evaluator.
-- **`EventTimeline.tsx`**: Retain; add quick filters for lifecycle stages.
-- **`ActionLifecycleTimeline.tsx`**: Retain for 6-stage lifecycle tracing.
-- **`PolicyDecisionExplorer.tsx`**: Retain for policy audit and rule inspection.
-- **`InvestigationView.tsx`**: Retain; enhance with topology and root-cause visualization tabs.
-- **`BenchmarkView.tsx`**: Retain; enhance with dual-mode selector (Synthetic Simulator Benchmark vs. Phase 5 Real-Dataset Evaluation).
-- **`IncidentsView.tsx`**: Upgrade with sorting, search, multi-field filtering, and quick summary stats.
+- **`EventTimeline.tsx`**: Retain; formatted event summaries with Phase 1–4 governance.
+- **`ActionLifecycleTimeline.tsx`**: 6-stage lifecycle tracing (`Proposal → Policy → Approval → Execution → Verification → Outcome`).
+- **`PolicyDecisionExplorer.tsx`**: Policy audit and rule inspection deck.
+- **`InvestigationView.tsx`**: Autonomous Cockpit with hypothesis matrix, evidence ledger, and integrated Service Topology Explorer.
+- **`ServiceTopologyExplorer.tsx`**: Dynamic microservice topology visualization with evidence-backed dependency links, provenance tags, and honest unavailable state.
+- **`AnalyticsDashboard.tsx`**: Operational Analytics Dashboard with transparent metric derivation and explicit unavailable states for unmeasured metrics.
+- **`BenchmarkView.tsx`**: Dual-mode evaluation lab separating synthetic simulator benchmarks from Phase 5 real-dataset evaluation preview.
+- **`IncidentsView.tsx`**: Advanced Incident Explorer with sorting, search, multi-field filtering, and incident inspection.
+- **`ApprovalsView.tsx`**: Governance & Audit Center with pending approval queue and policy rule matrix.
 
 ---
 

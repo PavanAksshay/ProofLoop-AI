@@ -168,26 +168,78 @@ describe('Service Topology Integrity & Evidence Provenance Tests', () => {
     expect(graph.nodes.some((n) => n.id === 'checkout-service')).toBe(false);
   });
 
-  it('marks all inferred links with provenance: inferred and protocol: null', () => {
-    const multiServiceInvestigation: InvestigationState = {
-      incident_id: 'inc-multi',
+  it('proves that unrelated co-occurring services do NOT produce dependency edges', () => {
+    const unrelatedServicesInvestigation: InvestigationState = {
+      incident_id: 'inc-unrelated',
+      symptoms: ['multiple isolated anomalies'],
+      step: 2,
+      hypotheses: [],
+      evidence: [
+        {
+          id: 'ev-auth-isolated',
+          source: 'auth.log',
+          kind: 'direct_observation',
+          summary: 'Token signature verification expired for local key',
+          data: {},
+          timestamp: '2026-10-24T10:00:00Z',
+        },
+        {
+          id: 'ev-pg-isolated',
+          source: 'postgres.log',
+          kind: 'direct_observation',
+          summary: 'WAL checkpoint disk flush completed in 42ms',
+          data: {},
+          timestamp: '2026-10-24T10:00:05Z',
+        },
+      ],
+      diagnostics_performed: [],
+      outstanding_uncertainties: [],
+      remediation_history: [],
+      budget: {
+        max_steps: 10,
+        max_diagnostics: 5,
+        max_remediations: 3,
+        steps_taken: 2,
+        diagnostics_run: 0,
+        remediations_attempted: 0,
+        remediations_proposed: 0,
+        remediations_blocked: 0,
+        remediations_pending_approval: 0,
+      },
+      replanning_cycle: 0,
+    };
+
+    const graph = inferServiceTopology(unrelatedServicesInvestigation, 'inc-unrelated');
+
+    // Both nodes exist because telemetry was observed for each
+    expect(graph.nodes).toHaveLength(2);
+    expect(graph.nodes.some((n) => n.id === 'auth-service')).toBe(true);
+    expect(graph.nodes.some((n) => n.id === 'database')).toBe(true);
+
+    // CRITICAL: Co-occurrence alone MUST NOT establish a dependency edge
+    expect(graph.links).toHaveLength(0);
+  });
+
+  it('creates evidence-backed links with evidenceRefs, rationale, and null protocol when interaction is observed', () => {
+    const interactionInvestigation: InvestigationState = {
+      incident_id: 'inc-interaction',
       symptoms: ['slow transactions'],
       step: 2,
       hypotheses: [],
       evidence: [
         {
-          id: 'ev-chk',
+          id: 'ev-chk-timeout',
           source: 'checkout-service.log',
           kind: 'direct_observation',
-          summary: 'DB pool timeout',
+          summary: 'connection timeout to db:5432 pool exhausted',
           data: {},
           timestamp: '2026-10-24T10:00:00Z',
         },
         {
-          id: 'ev-db',
+          id: 'ev-db-conns',
           source: 'postgres.log',
           kind: 'direct_observation',
-          summary: 'Max connections reached',
+          summary: 'Max connections reached: 100/100',
           data: {},
           timestamp: '2026-10-24T10:00:10Z',
         },
@@ -209,13 +261,16 @@ describe('Service Topology Integrity & Evidence Provenance Tests', () => {
       replanning_cycle: 0,
     };
 
-    const graph = inferServiceTopology(multiServiceInvestigation, 'inc-multi');
+    const graph = inferServiceTopology(interactionInvestigation, 'inc-interaction');
 
-    expect(graph.links.length).toBeGreaterThan(0);
-    for (const link of graph.links) {
-      expect(link.provenance).toBe('inferred');
-      expect(link.protocol).toBeNull();
-      expect(link.rationale).toContain('Inferred from co-occurrence in telemetry');
-    }
+    expect(graph.links).toHaveLength(1);
+    const link = graph.links[0];
+    expect(link.source).toBe('checkout-service');
+    expect(link.target).toBe('database');
+    expect(link.provenance).toBe('inferred');
+    expect(link.protocol).toBeNull(); // Protocol is never fabricated
+    expect(link.evidenceRefs).toContain('ev-chk-timeout');
+    expect(link.rationale).toContain('ev-chk-timeout');
+    expect(link.rationale).toContain('checkout-service to database');
   });
 });
