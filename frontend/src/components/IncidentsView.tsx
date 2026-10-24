@@ -34,6 +34,11 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [scenarioFilter, setScenarioFilter] = useState<string>('ALL');
+  const [clientFilter, setClientFilter] = useState<string>('ALL');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const copyIncidentId = (id: string, e: React.MouseEvent) => {
@@ -43,10 +48,32 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
     setTimeout(() => setCopiedId(null), 1500);
   };
 
+  const uniqueScenarios = useMemo(() => {
+    const set = new Set<string>();
+    incidents.forEach((i) => i.scenario && set.add(i.scenario));
+    return Array.from(set).sort();
+  }, [incidents]);
+
+  const uniqueClients = useMemo(() => {
+    const set = new Set<string>();
+    incidents.forEach((i) => i.client && set.add(i.client));
+    return Array.from(set).sort();
+  }, [incidents]);
+
   const filteredIncidents = useMemo(() => {
-    return incidents.filter((item) => {
+    const list = incidents.filter((item) => {
       // Status filter
       if (statusFilter !== 'ALL' && item.outcome !== statusFilter) {
+        return false;
+      }
+
+      // Scenario filter
+      if (scenarioFilter !== 'ALL' && item.scenario !== scenarioFilter) {
+        return false;
+      }
+
+      // Client filter
+      if (clientFilter !== 'ALL' && item.client !== clientFilter) {
         return false;
       }
 
@@ -60,7 +87,22 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
         (item.summary && item.summary.toLowerCase().includes(q))
       );
     });
-  }, [incidents, statusFilter, searchQuery]);
+
+    list.sort((a, b) => {
+      const timeA = new Date(a.created_at || 0).getTime();
+      const timeB = new Date(b.created_at || 0).getTime();
+      return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
+    });
+
+    return list;
+  }, [incidents, statusFilter, scenarioFilter, clientFilter, searchQuery, sortOrder]);
+
+  const paginatedIncidents = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredIncidents.slice(start, start + pageSize);
+  }, [filteredIncidents, currentPage, pageSize]);
+
+  const totalPages = Math.ceil(filteredIncidents.length / pageSize) || 1;
 
   const statusOptions = ['ALL', 'VERIFIED', 'PENDING_APPROVAL', 'RUNNING', 'ESCALATED', 'BLOCKED', 'UNVERIFIED'];
 
@@ -136,6 +178,82 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Advanced Filters: Scenario, Client, Sorting & Page Sizing */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#DFD7C7] text-xs font-mono">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[#6B6255] uppercase text-[11px]">Scenario:</span>
+              <select
+                value={scenarioFilter}
+                onChange={(e) => {
+                  setScenarioFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="px-2 py-1 bg-[#ECE6DC] border border-[#DFD7C7] text-xs font-mono text-[#1C1917] focus:outline-none"
+                aria-label="Filter incidents by scenario"
+              >
+                <option value="ALL">ALL SCENARIOS</option>
+                {uniqueScenarios.map((sc) => (
+                  <option key={sc} value={sc}>
+                    {sc}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[#6B6255] uppercase text-[11px]">Client:</span>
+              <select
+                value={clientFilter}
+                onChange={(e) => {
+                  setClientFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="px-2 py-1 bg-[#ECE6DC] border border-[#DFD7C7] text-xs font-mono text-[#1C1917] focus:outline-none"
+                aria-label="Filter incidents by client"
+              >
+                <option value="ALL">ALL CLIENTS</option>
+                {uniqueClients.map((cl) => (
+                  <option key={cl} value={cl}>
+                    {cl}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[#6B6255] uppercase text-[11px]">Sort:</span>
+              <select
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as 'desc' | 'asc')}
+                className="px-2 py-1 bg-[#ECE6DC] border border-[#DFD7C7] text-xs font-mono text-[#1C1917] focus:outline-none"
+                aria-label="Sort incidents"
+              >
+                <option value="desc">NEWEST FIRST</option>
+                <option value="asc">OLDEST FIRST</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-[11px] text-[#6B6255]">
+            <span>Showing {paginatedIncidents.length} of {filteredIncidents.length}</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="px-2 py-1 bg-[#ECE6DC] border border-[#DFD7C7] text-xs font-mono text-[#1C1917] focus:outline-none"
+              aria-label="Page size"
+            >
+              <option value={10}>10 per page</option>
+              <option value={25}>25 per page</option>
+              <option value={50}>50 per page</option>
+              <option value={100}>100 per page</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       {/* Error state */}
@@ -184,7 +302,7 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
       {/* Incident List */}
       {!isLoading && !error && filteredIncidents.length > 0 && (
         <div className="flex flex-col gap-3">
-          {filteredIncidents.map((item) => {
+          {paginatedIncidents.map((item) => {
             const isSelected = item.incident_id === selectedIncidentId;
 
             return (
@@ -310,6 +428,31 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Pagination Controls */}
+      {!isLoading && !error && filteredIncidents.length > 0 && totalPages > 1 && (
+        <div className="flex items-center justify-between border-t border-[#DFD7C7] pt-3 font-mono text-xs">
+          <button
+            type="button"
+            disabled={currentPage <= 1}
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            className="btn btn-secondary text-xs py-1 px-3 disabled:opacity-40"
+          >
+            &larr; PREVIOUS
+          </button>
+          <span className="text-[#6B6255]">
+            PAGE <strong className="text-[#1C1917]">{currentPage}</strong> OF <strong className="text-[#1C1917]">{totalPages}</strong>
+          </span>
+          <button
+            type="button"
+            disabled={currentPage >= totalPages}
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            className="btn btn-secondary text-xs py-1 px-3 disabled:opacity-40"
+          >
+            NEXT &rarr;
+          </button>
         </div>
       )}
     </div>

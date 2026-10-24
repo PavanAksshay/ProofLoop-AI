@@ -1,7 +1,7 @@
 import React from 'react';
-import { Activity, Compass, History, ShieldAlert, Terminal } from 'lucide-react';
+import { TrendingUp, Activity, Compass, History, ShieldAlert, Terminal } from 'lucide-react';
 
-export type NavViewKey = 'operations' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
+export type NavViewKey = 'dashboard' | 'operations' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
 
 interface SidebarNavProps {
   activeView: NavViewKey;
@@ -11,6 +11,7 @@ interface SidebarNavProps {
 }
 
 const navItems = [
+  { key: 'dashboard', icon: TrendingUp, label: 'DASHBOARD' },
   { key: 'operations', icon: Activity, label: 'LIVE OPERATIONS' },
   { key: 'investigations', icon: Compass, label: 'INVESTIGATIONS' },
   { key: 'incidents', icon: History, label: 'INCIDENTS' },

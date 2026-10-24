@@ -1,8 +1,8 @@
 import React from 'react';
-import { ShieldCheck, Activity, Terminal, Compass, History, ShieldAlert } from 'lucide-react';
+import { ShieldCheck, Activity, Terminal, Compass, History, ShieldAlert, TrendingUp } from 'lucide-react';
 import { HealthResponse } from '../types';
 
-export type ActiveViewKey = 'operations' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
+export type ActiveViewKey = 'dashboard' | 'operations' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
 
 interface HeaderProps {
   health?: HealthResponse | null;
@@ -50,8 +50,22 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <button
                 type="button"
+                onClick={() => onSelectView('dashboard')}
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                  activeView === 'dashboard'
+                    ? 'bg-[#1C1917] text-[#FAF6F0]'
+                    : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
+                }`}
+                aria-label="Analytics Dashboard View"
+              >
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span>// 00 DASHBOARD</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => onSelectView('operations')}
-                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
                   activeView === 'operations'
                     ? 'bg-[#1C1917] text-[#FAF6F0]'
                     : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
@@ -65,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectView('investigations')}
-                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
                   activeView === 'investigations'
                     ? 'bg-[#1C1917] text-[#FAF6F0]'
                     : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
@@ -79,7 +93,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectView('incidents')}
-                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
                   activeView === 'incidents'
                     ? 'bg-[#1C1917] text-[#FAF6F0]'
                     : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
@@ -93,7 +107,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectView('approvals')}
-                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 relative ${
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 relative ${
                   activeView === 'approvals'
                     ? 'bg-[#1C1917] text-[#FAF6F0]'
                     : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
@@ -110,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectView('benchmark')}
-                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
                   activeView === 'benchmark'
                     ? 'bg-[#1C1917] text-[#FAF6F0]'
                     : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
