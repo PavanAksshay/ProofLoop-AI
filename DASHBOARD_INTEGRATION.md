@@ -262,3 +262,26 @@ Retrieves the benchmark report.
 6. Show each verifier check and the final outcome. Never mark recovery as verified solely from a green health endpoint.
 7. Handle 404/409/422 responses and reconnect SSE with the last numeric sequence.
 8. Label all execution and metrics as synthetic/simulated.
+
+
+---
+
+## Analytics and Topology Integration Boundaries
+
+### 1. Analytics Metric Derivation & Contract Gaps
+- **False-Success Rate**: Requires per-incident verification check records (`remediation_history[].verification_checks`). Because `GET /incidents` summary records do not expose check details, the frontend marks this metric `UNAVAILABLE` rather than fabricating a zero rate.
+- **Policy Violation Rate**: Requires policy decision records (`action_proposed` / `policy_decision` events). Because these records only exist in the live SSE event stream, the historical overview marks this metric `UNAVAILABLE`.
+- **Mean Time to Recovery (MTTR)**: Derived strictly from incidents whose authoritative terminal outcome is `VERIFIED` and where `updated_at > created_at`. Equal (zero-duration), negative, or missing timestamps are excluded from the calculation.
+- **Verified Recovery Count**: Counts only incidents where `outcome === 'VERIFIED'`. Tool execution success alone is never treated as verified recovery.
+
+### 2. Service Topology Derivation & Contract Gaps
+- **No Static Backend Topology Endpoint**: The backend currently does not provide a `GET /incidents/{id}/topology` route.
+- **Evidence-Backed Synthesis Only**:
+  - Nodes are extracted strictly from observed diagnostic executions, log evidence sources, and remediation targets.
+  - Standard/default services are never unconditionally injected.
+  - Co-occurrence of two services in telemetry does not establish a dependency relationship.
+  - Edges are created only when specific evidence or an explicit hypothesis supports cross-service interaction.
+  - Network protocols are never fabricated (protocol is `null` unless directly observed in telemetry data).
+  - Diagnostic probe success does not assert service health (status remains `unknown`).
+  - Service health is marked `healthy` only upon independent verification confirmation (`verification_passed === true`).
+  - If an incident contains no service telemetry, an honest unavailable state is rendered.
