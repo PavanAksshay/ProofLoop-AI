@@ -11,6 +11,7 @@ import {
   Layers,
   Activity,
   RotateCcw,
+  Shield,
 } from 'lucide-react';
 import {
   EvidenceItem,
@@ -552,6 +553,37 @@ export const InvestigationView: React.FC<InvestigationViewProps> = ({
               </div>
             </div>
 
+            {/* Required Evidence Constraints & Missing Indicators */}
+            {selectedHypothesis.required_evidence && selectedHypothesis.required_evidence.length > 0 && (
+              <div className="bg-[#FAF4EB] p-3 border border-[#E7D6C0]" data-testid="hypothesis-required-evidence">
+                <span className="font-mono text-xs font-bold text-[#8A5818] block mb-1">
+                  Required Evidence Constraints ({selectedHypothesis.required_evidence.length}):
+                </span>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {selectedHypothesis.required_evidence.map((reqId) => {
+                    const isPresent = evidenceMap.has(reqId);
+                    return isPresent ? (
+                      <span
+                        key={reqId}
+                        className="badge badge-emerald font-mono text-[10px]"
+                        title={`Required evidence satisfied by ${reqId}`}
+                      >
+                        ✓ SATISFIED: {reqId}
+                      </span>
+                    ) : (
+                      <span
+                        key={reqId}
+                        className="badge badge-rose font-mono text-[10px]"
+                        title={`Required evidence missing: ${reqId}`}
+                      >
+                        ✕ MISSING: {reqId}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Diagnostics and Remediation recommendations */}
             {(selectedHypothesis.suggested_diagnostic || selectedHypothesis.suggested_remediation) && (
               <div className="flex flex-wrap gap-3 pt-2 border-t border-[#DFD7C7] text-xs font-mono">
@@ -616,7 +648,7 @@ export const InvestigationView: React.FC<InvestigationViewProps> = ({
               const hasData = ev.data && Object.keys(ev.data).length > 0;
 
               return (
-                <div key={ev.id} className="p-3 border border-[#DFD7C7] bg-[#ECE6DC]">
+                <div key={ev.id} data-testid={`evidence-row-${ev.id}`} className="p-3 border border-[#DFD7C7] bg-[#ECE6DC]">
                   <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-[#1C1917]">
@@ -860,6 +892,190 @@ export const InvestigationView: React.FC<InvestigationViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Row 5: Adaptive Recovery & Replanning Narrative */}
+      {replanning_cycle > 0 && (
+        <div className="panel border-l-4 border-l-[#B45309]" data-testid="adaptive-recovery-section">
+          <div className="panel-header">
+            <h2 className="panel-title">
+              <RotateCcw className="w-4 h-4 text-[#B45309]" />
+              <span>Adaptive Recovery Narrative ({replanning_cycle} {replanning_cycle === 1 ? 'Cycle' : 'Cycles'})</span>
+            </h2>
+            <span className="badge badge-amber font-mono text-xs">
+              Cycle #{replanning_cycle}
+            </span>
+          </div>
+
+          <div className="text-xs text-[#575044] mb-3">
+            The autonomous investigator adapted its hypothesis and recovery plan after observing post-action evidence or failed verification.
+          </div>
+
+          <div className="flex flex-col gap-2">
+            {remediation_history.map((rem, idx) => (
+              <div key={rem.id || idx} className="p-3 bg-[#FAF6F0] border border-[#DFD7C7] flex flex-col gap-1.5 font-mono text-xs">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-[#1C1917]">
+                      Cycle Step #{rem.attempt}: {rem.tool}
+                    </span>
+                    <span className="badge badge-synthetic text-[10px]">
+                      {rem.service}
+                    </span>
+                  </div>
+                  <span
+                    className={`badge text-[10px] ${
+                      rem.verification_passed === true
+                        ? 'badge-emerald'
+                        : rem.verification_passed === false
+                        ? 'badge-rose'
+                        : rem.policy_decision === 'BLOCKED'
+                        ? 'badge-rose'
+                        : 'badge-amber'
+                    }`}
+                  >
+                    {rem.verification_passed === true
+                      ? 'VERIFIED'
+                      : rem.verification_passed === false
+                      ? 'FAILED'
+                      : rem.policy_decision === 'BLOCKED'
+                      ? 'BLOCKED'
+                      : 'UNVERIFIED'}
+                  </span>
+                </div>
+
+                {rem.originating_hypothesis_id && (
+                  <div className="text-[11px] text-[#6B6255]">
+                    Target Hypothesis: <span className="font-bold text-[#0E7490]">{rem.originating_hypothesis_id}</span>
+                  </div>
+                )}
+
+                {rem.replanning_reason && (
+                  <div className="p-2 bg-[#F7EEDC] border border-[#E6CE9F] text-[#78350F] text-[11px]">
+                    <strong className="uppercase">Replanning Trigger:</strong> {rem.replanning_reason}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Row 6: Independent Verification Proof */}
+      {remediation_history.some((r) => (r.verification_checks && r.verification_checks.length > 0) || (r.verification_passed !== undefined && r.verification_passed !== null)) && (
+        <div className="panel" data-testid="verification-proof-panel">
+          <div className="panel-header">
+            <h2 className="panel-title">
+              <Shield className="w-4 h-4 text-[#0E7490]" />
+              <span>Independent Verification Proof</span>
+            </h2>
+            {remediation_history.some((r) => r.verification_passed === true) ? (
+              <span className="badge badge-emerald font-mono text-xs">
+                RECOVERY PROVEN
+              </span>
+            ) : remediation_history.some((r) => r.verification_passed === false) ? (
+              <span className="badge badge-rose font-mono text-xs">
+                VERIFICATION FAILED
+              </span>
+            ) : (
+              <span className="badge badge-synthetic font-mono text-xs">
+                AWAITING PROOF
+              </span>
+            )}
+          </div>
+
+          {/* Verification banners */}
+          {remediation_history.some((r) => r.verification_passed === true) && (
+            <div
+              className="p-3 bg-[#E7F0E5] border border-[#BCD5B8] text-xs font-mono text-emerald-950 flex items-center justify-between gap-2"
+              data-testid="recovery-verified-banner"
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-bold">✓ RECOVERY VERIFIED:</span>
+                <span>All mandatory invariants passed independent verification.</span>
+              </div>
+            </div>
+          )}
+
+          {remediation_history.some((r) => r.verification_passed === false) && !remediation_history.some((r) => r.verification_passed === true) && (
+            <div
+              className="p-3 bg-[#F8E7E7] border border-[#E8B8B8] text-xs font-mono text-rose-950 flex items-center justify-between gap-2"
+              data-testid="recovery-not-proven-banner"
+            >
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-700 flex-shrink-0" />
+                <div>
+                  <strong className="text-rose-900">RECOVERY NOT PROVEN:</strong>{' '}
+                  <span>One or more post-remediation invariant checks failed or produced contradictory observations.</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Per-invariant check breakdown */}
+          <div className="flex flex-col gap-3 mt-2">
+            {remediation_history.map((rem, rIdx) => {
+              const checks = rem.verification_checks || [];
+              if (checks.length === 0) return null;
+              return (
+                <div key={rem.id || rIdx} className="bg-[#ECE6DC] p-3 border border-[#DFD7C7]">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-mono text-xs font-bold text-[#1C1917]">
+                      Attempt #{rem.attempt} Invariant Checks ({rem.tool})
+                    </span>
+                    <span
+                      className={`badge font-mono text-[10px] ${
+                        rem.verification_passed === true
+                          ? 'badge-emerald'
+                          : rem.verification_passed === false
+                          ? 'badge-rose'
+                          : 'badge-synthetic'
+                      }`}
+                    >
+                      {rem.verification_passed === true
+                        ? 'VERIFIED'
+                        : rem.verification_passed === false
+                        ? 'FAILED'
+                        : 'UNVERIFIED'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {checks.map((check, cIdx) => (
+                      <div
+                        key={cIdx}
+                        className={`p-2.5 border text-xs font-mono flex flex-col gap-1 ${
+                          check.passed
+                            ? 'border-[#BCD5B8] bg-[#F2F7F1]'
+                            : 'border-[#E8B8B8] bg-[#FCF3F3]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-[#1C1917]">{check.check_name}</span>
+                          <span
+                            className={`badge font-mono text-[10px] ${
+                              check.passed ? 'badge-emerald' : 'badge-rose'
+                            }`}
+                          >
+                            {check.passed ? 'PASS' : 'FAIL'}
+                          </span>
+                        </div>
+                        {check.observed && Object.keys(check.observed).length > 0 && (
+                          <div className="text-[11px] text-[#575044] bg-[#FAF6F0] p-1.5 border border-[#DFD7C7] mt-1 overflow-x-auto">
+                            <span className="text-[#827869] block text-[9px] uppercase">Observed:</span>
+                            <pre className="text-[10px] font-mono leading-tight">
+                              {JSON.stringify(check.observed, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
