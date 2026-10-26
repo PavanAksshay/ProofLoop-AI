@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowUpRight, ShieldCheck, Cpu, Activity, Database } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 
 interface ProofLoopHeroProps {
   onStartClick: () => void;
@@ -23,7 +23,7 @@ export const ProofLoopHero: React.FC<ProofLoopHeroProps> = ({
         </div>
       </div>
 
-      <div className="relative z-10 w-full max-w-5xl mx-auto px-6 py-20 text-center flex flex-col items-center justify-center">
+      <div className="relative z-10 w-full max-w-5xl mx-auto px-6 py-16 text-center flex flex-col items-center justify-center">
         {/* Hero Title - Sharp, Architectural, Evenly Spaced */}
         <h1 className="text-center font-bold text-3xl sm:text-4xl md:text-5xl lg:text-6xl text-[#1C1917] tracking-tight leading-tight uppercase max-w-4xl mx-auto mb-4">
           POLICY-GOVERNED INCIDENT RESOLUTION
@@ -49,53 +49,6 @@ export const ProofLoopHero: React.FC<ProofLoopHeroProps> = ({
               <ArrowUpRight className="absolute h-4 w-4 -translate-x-6 transition-all duration-300 ease-in-out group-hover:-translate-x-1/2" />
             </div>
           </button>
-        </div>
-
-        {/* Architectural KPI Metric Row - Sharp Technical Meters Evenly Spaced */}
-        <div className="mt-16 w-full max-w-5xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0 border border-[#DFD7C7] divide-y sm:divide-y-0 sm:divide-x divide-[#DFD7C7] bg-[#FAF6F0] text-left">
-          <div className="p-6 flex flex-col justify-between min-h-[115px]">
-            <div className="flex items-center gap-2 text-[#6B6255] text-[11px] font-mono uppercase tracking-wider mb-2">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#0E7490]" />
-              <span>Policy Invariant</span>
-            </div>
-            <div>
-              <div className="text-xl font-bold font-mono text-[#1C1917]">0 MUTATIONS</div>
-              <div className="text-[11px] text-[#6B6255] mt-1.5 leading-snug">Without explicit policy authorization</div>
-            </div>
-          </div>
-
-          <div className="p-6 flex flex-col justify-between min-h-[115px]">
-            <div className="flex items-center gap-2 text-[#6B6255] text-[11px] font-mono uppercase tracking-wider mb-2">
-              <Activity className="w-3.5 h-3.5 text-[#166534]" />
-              <span>Verifier Engine</span>
-            </div>
-            <div>
-              <div className="text-xl font-bold font-mono text-[#166534]">3-CHECK PROBES</div>
-              <div className="text-[11px] text-[#6B6255] mt-1.5 leading-snug">Rejects false-green HTTP 200 checks</div>
-            </div>
-          </div>
-
-          <div className="p-6 flex flex-col justify-between min-h-[115px]">
-            <div className="flex items-center gap-2 text-[#6B6255] text-[11px] font-mono uppercase tracking-wider mb-2">
-              <Cpu className="w-3.5 h-3.5 text-[#5B21B6]" />
-              <span>Proposal Plane</span>
-            </div>
-            <div>
-              <div className="text-xl font-bold font-mono text-[#1C1917]">ASYNCHRONOUS AI</div>
-              <div className="text-[11px] text-[#6B6255] mt-1.5 leading-snug">Untrusted LLM proposals only</div>
-            </div>
-          </div>
-
-          <div className="p-6 flex flex-col justify-between min-h-[115px]">
-            <div className="flex items-center gap-2 text-[#6B6255] text-[11px] font-mono uppercase tracking-wider mb-2">
-              <Database className="w-3.5 h-3.5 text-[#92400E]" />
-              <span>Safety Isolation</span>
-            </div>
-            <div>
-              <div className="text-xl font-bold font-mono text-[#1C1917]">SYNTHETIC ONLY</div>
-              <div className="text-[11px] text-[#6B6255] mt-1.5 leading-snug">Isolated in-memory simulation</div>
-            </div>
-          </div>
         </div>
       </div>
     </section>

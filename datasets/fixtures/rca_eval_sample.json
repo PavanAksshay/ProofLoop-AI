@@ -1,0 +1,76 @@
+{
+  "dataset_name": "RCAEval",
+  "distribution_version": "v1.0.0",
+  "source_repository": "https://github.com/phamquiluan/RCAEval",
+  "source_commit": "c4d28e71fa098234ab8e391b10a234f98124ef12",
+  "cases": [
+    {
+      "case_key": "rca_eval/cpu_hog/1",
+      "case_id": "1",
+      "system": "sockshop",
+      "category": "performance",
+      "namespace": "sockshop",
+      "difficulty": "medium",
+      "query": "Severe latency degradation and 504 gateway timeouts on user orders.",
+      "fault_object": "app/orders",
+      "fault_taxonomy": "CPU_Exhaustion",
+      "root_cause": "cpu_quota_hog",
+      "valid_alternative_labels": ["cpu_starvation", "orders_cpu_spike"],
+      "tool_cache": {
+        "GetMetrics:{\"service\":\"orders\",\"namespace\":\"sockshop\"}": "{\"cpu_utilization_pct\": 99.4, \"cpu_throttled_time_pct\": 91.2, \"p99_latency_ms\": 5400, \"active_threads\": 200}",
+        "GetLogs:{\"service\":\"orders\",\"namespace\":\"sockshop\"}": "WARN [io.undertow.request] UT005018: Connection reset by peer\nERROR [com.sockshop.orders] OrderProcessingException: Request timeout after 5000ms\n"
+      }
+    },
+    {
+      "case_key": "rca_eval/mem_leak/1",
+      "case_id": "2",
+      "system": "sockshop",
+      "category": "runtime",
+      "namespace": "sockshop",
+      "difficulty": "hard",
+      "query": "Payment service Pod restarts and intermittent 500 Internal Server Errors.",
+      "fault_object": "app/payment",
+      "fault_taxonomy": "Memory_Leak",
+      "root_cause": "unbounded_session_cache_leak",
+      "valid_alternative_labels": ["memory_leak", "payment_oom_killed"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"payment\",\"namespace\":\"sockshop\"}": "java.lang.OutOfMemoryError: Java heap space\n\tat java.util.HashMap.resize(HashMap.java:704)\n\tat java.util.HashMap.putVal(HashMap.java:629)\n\tat com.sockshop.payment.SessionCache.put(SessionCache.java:44)\n",
+        "GetMetrics:{\"service\":\"payment\",\"namespace\":\"sockshop\"}": "{\"heap_used_mb\": 512, \"heap_max_mb\": 512, \"pod_restart_count\": 4, \"oom_killed\": true}"
+      }
+    },
+    {
+      "case_key": "rca_eval/network_delay/1",
+      "case_id": "3",
+      "system": "sockshop",
+      "category": "network",
+      "namespace": "sockshop",
+      "difficulty": "medium",
+      "query": "Frontend page load timeout due to slow catalog service dependency.",
+      "fault_object": "app/catalogue",
+      "fault_taxonomy": "Network_Latency",
+      "root_cause": "inter_service_packet_delay",
+      "valid_alternative_labels": ["network_delay", "catalogue_timeout"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"frontend\",\"namespace\":\"sockshop\"}": "WARN: Failed to fetch catalogue items in 3000ms: ETIMEDOUT\nERROR: Render pipeline timeout for endpoint /catalogue\n",
+        "GetMetrics:{\"service\":\"catalogue\",\"namespace\":\"sockshop\"}": "{\"rtt_p99_ms\": 2850, \"packet_delay_ms\": 1500, \"dropped_packets\": 0}"
+      }
+    },
+    {
+      "case_key": "rca_eval/disk_exhaust/1",
+      "case_id": "4",
+      "system": "sockshop",
+      "category": "storage",
+      "namespace": "sockshop",
+      "difficulty": "hard",
+      "query": "Database persistent volume full causing order write failures.",
+      "fault_object": "db/orders-db",
+      "fault_taxonomy": "Disk_Full",
+      "root_cause": "disk_volume_exhaustion",
+      "valid_alternative_labels": ["disk_full", "no_space_left_on_device"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"orders-db\",\"namespace\":\"sockshop\"}": "2026-10-24T14:12:00Z [ERROR] [MY-012574] [InnoDB] Write to file ./orders/orders.ibd failed at offset 10737418240: No space left on device\n2026-10-24T14:12:01Z [ERROR] Disk is full. Writing to binlog blocked.\n",
+        "GetMetrics:{\"service\":\"orders-db\",\"namespace\":\"sockshop\"}": "{\"disk_used_gb\": 50, \"disk_capacity_gb\": 50, \"disk_utilization_pct\": 100.0}"
+      }
+    }
+  ]
+}

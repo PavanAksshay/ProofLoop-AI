@@ -1,0 +1,76 @@
+{
+  "dataset_name": "TrainTicket-Chaos",
+  "distribution_version": "v1.0.0",
+  "source_repository": "https://github.com/FudanSELab/train-ticket",
+  "source_commit": "d9812a450123efb671a5c32890aef4560128ac91",
+  "cases": [
+    {
+      "case_key": "trainticket/db_deadlock/1",
+      "case_id": "1",
+      "system": "trainticket",
+      "category": "database",
+      "namespace": "trainticket",
+      "difficulty": "hard",
+      "query": "Ticket booking transaction rollback due to persistent SQL deadlock.",
+      "fault_object": "ts-order-service",
+      "fault_taxonomy": "Database_Deadlock",
+      "root_cause": "row_lock_deadlock_detected",
+      "valid_alternative_labels": ["database_deadlock", "innodb_deadlock"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"ts-order-service\",\"namespace\":\"trainticket\"}": "ERROR [ts-order-service] org.springframework.dao.DeadlockLoserDataAccessException: PreparedStatementCallback; SQL [UPDATE orders SET status = 1 WHERE id = ?]; Deadlock found when trying to get lock; try restarting transaction\n",
+        "GetMetrics:{\"service\":\"ts-order-db\",\"namespace\":\"trainticket\"}": "{\"deadlocks_last_5m\": 24, \"active_row_locks\": 180, \"lock_wait_time_ms\": 50000}"
+      }
+    },
+    {
+      "case_key": "trainticket/circuit_breaker/1",
+      "case_id": "2",
+      "system": "trainticket",
+      "category": "runtime",
+      "namespace": "trainticket",
+      "difficulty": "medium",
+      "query": "Train travel query failure due to open circuit breaker.",
+      "fault_object": "ts-travel-service",
+      "fault_taxonomy": "Circuit_Breaker_Open",
+      "root_cause": "resilience4j_circuit_open",
+      "valid_alternative_labels": ["circuit_breaker_tripped", "fallback_service_unavailable"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"ts-travel-service\",\"namespace\":\"trainticket\"}": "WARN [io.github.resilience4j.circuitbreaker] CircuitBreaker 'travelQuery' recorded 50% failure rate; transitioned from CLOSED to OPEN\nERROR [ts-travel-service] CallNotPermittedException: CircuitBreaker 'travelQuery' is OPEN and does not permit further calls\n",
+        "GetMetrics:{\"service\":\"ts-travel-service\",\"namespace\":\"trainticket\"}": "{\"circuit_state\": \"OPEN\", \"failure_rate_pct\": 62.5, \"slow_calls_pct\": 40.0}"
+      }
+    },
+    {
+      "case_key": "trainticket/redis_eviction/1",
+      "case_id": "3",
+      "system": "trainticket",
+      "category": "performance",
+      "namespace": "trainticket",
+      "difficulty": "medium",
+      "query": "Authentication failure spike caused by Redis token key eviction.",
+      "fault_object": "ts-auth-service",
+      "fault_taxonomy": "Cache_Eviction",
+      "root_cause": "redis_maxmemory_eviction",
+      "valid_alternative_labels": ["cache_stampede", "token_eviction_failure"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"ts-auth-service\",\"namespace\":\"trainticket\"}": "WARN [ts-auth-service] Token verification cache miss for user token session_98129\nERROR [redis] OOM command not allowed when used memory > 'maxmemory'\n",
+        "GetMetrics:{\"service\":\"redis-auth\",\"namespace\":\"trainticket\"}": "{\"evicted_keys_rate\": 850, \"used_memory_mb\": 1024, \"maxmemory_mb\": 1024, \"cache_hit_rate\": 0.22}"
+      }
+    },
+    {
+      "case_key": "trainticket/config_drift/1",
+      "case_id": "4",
+      "system": "trainticket",
+      "category": "admission",
+      "namespace": "trainticket",
+      "difficulty": "hard",
+      "query": "Mismatched gRPC payload protobuf schema causing serialization crash.",
+      "fault_object": "ts-station-service",
+      "fault_taxonomy": "Schema_Mismatch",
+      "root_cause": "grpc_protobuf_field_missing",
+      "valid_alternative_labels": ["config_drift", "grpc_serialization_error"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"ts-station-service\",\"namespace\":\"trainticket\"}": "io.grpc.StatusRuntimeException: INVALID_ARGUMENT: Could not decode protobuf: required field 'station_id_v2' missing\n\tat io.grpc.stub.ClientCalls.toStatusRuntimeException(ClientCalls.java:262)\n",
+        "GetMetrics:{\"service\":\"ts-station-service\",\"namespace\":\"trainticket\"}": "{\"grpc_status_invalid_argument_count\": 120, \"schema_version\": \"v1_legacy\"}"
+      }
+    }
+  ]
+}

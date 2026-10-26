@@ -186,6 +186,14 @@ export function subscribeToEvents(
           const outcome = parsedEvent.payload?.outcome;
           if (outcome && outcome !== 'RUNNING' && outcome !== 'PENDING_APPROVAL') {
             handlers.onStatusChange?.('completed');
+            isClosed = true;
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            setTimeout(() => {
+              if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+              }
+            }, 100);
           }
         }
       } catch (e) {
@@ -243,6 +251,14 @@ export function subscribeToEvents(
             const outcome = parsed.payload?.outcome;
             if (outcome && outcome !== 'RUNNING' && outcome !== 'PENDING_APPROVAL') {
               handlers.onStatusChange?.('completed');
+              isClosed = true;
+              if (reconnectTimeout) clearTimeout(reconnectTimeout);
+              setTimeout(() => {
+                if (eventSource) {
+                  eventSource.close();
+                  eventSource = null;
+                }
+              }, 100);
             }
           }
         } catch (e) {

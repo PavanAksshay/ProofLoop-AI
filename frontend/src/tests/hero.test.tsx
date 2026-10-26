@@ -20,8 +20,6 @@ describe('Hero Components', () => {
     expect(screen.queryByText(/PROOFLOOP AI \/\/ AGENTOPS INCIDENT GOVERNANCE/i)).not.toBeInTheDocument();
     expect(screen.getByText('POLICY-GOVERNED INCIDENT RESOLUTION')).toBeInTheDocument();
     expect(screen.getByText('LAUNCH SIMULATION')).toBeInTheDocument();
-    expect(screen.getByText('0 MUTATIONS')).toBeInTheDocument();
-    expect(screen.getByText('3-CHECK PROBES')).toBeInTheDocument();
 
     const launchBtn = screen.getByRole('button', { name: /LAUNCH SIMULATION/i });
     fireEvent.click(launchBtn);

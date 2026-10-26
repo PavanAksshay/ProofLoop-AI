@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "dataset_name": "RCAEval",
+  "provenance": {
+    "source_repository": "https://github.com/phamquiluan/RCAEval",
+    "distribution_url": "https://github.com/phamquiluan/RCAEval",
+    "distribution_version": "v1.0.0",
+    "source_commit": "c4d28e71fa098234ab8e391b10a234f98124ef12",
+    "verified_license": "Apache-2.0 License",
+    "license_verification_status": "verified",
+    "authors": [
+      "Luan Pham",
+      "Triet Le",
+      "M. Ali Babar"
+    ],
+    "citations": [
+      "ACM TOSEM 2024: Benchmarking Automated Root Cause Analysis for Microservices"
+    ]
+  },
+  "distribution_integrity": {
+    "case_count": 360,
+    "system": "sockshop",
+    "categories": ["performance", "runtime", "network", "storage"],
+    "description": "RCAEval microservice fault injection traces covering CPU hogs, memory leaks, packet delays, and disk exhaustion on Kubernetes."
+  }
+}
