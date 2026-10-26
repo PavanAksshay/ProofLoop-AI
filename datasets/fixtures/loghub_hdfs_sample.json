@@ -1,0 +1,76 @@
+{
+  "dataset_name": "LogHub-HDFS",
+  "distribution_version": "v1.0.0",
+  "source_repository": "https://github.com/logpai/loghub",
+  "source_commit": "b8f5223c7b64379a0cf58237919d7d3d81b4764b",
+  "cases": [
+    {
+      "case_key": "hdfs/block_loss/1",
+      "case_id": "1",
+      "system": "hdfs",
+      "category": "storage",
+      "namespace": "hadoop",
+      "difficulty": "medium",
+      "query": "HDFS block under-replication and read timeouts on worker nodes.",
+      "fault_object": "datanode-04",
+      "fault_taxonomy": "Storage_Block_Loss",
+      "root_cause": "block_report_timeout",
+      "valid_alternative_labels": ["datanode_block_timeout", "under_replication_failure"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"datanode\",\"node\":\"datanode-04\"}": "WARN org.apache.hadoop.hdfs.server.datanode.DataNode: Block report failed after 60000ms timeout on socket to namenode:8020.\nERROR org.apache.hadoop.hdfs.server.datanode.DataNode: IOException in block report processing for block blk_-1608999687919862906\n",
+        "GetMetrics:{\"service\":\"namenode\"}": "{\"under_replicated_blocks\": 1420, \"corrupt_replica_blocks\": 18, \"missing_blocks\": 3, \"active_datanodes\": 12}"
+      }
+    },
+    {
+      "case_key": "hdfs/datanode_crash/1",
+      "case_id": "2",
+      "system": "hdfs",
+      "category": "infrastructure",
+      "namespace": "hadoop",
+      "difficulty": "hard",
+      "query": "DataNode process termination and connection refusal during map-reduce shuffle.",
+      "fault_object": "datanode-08",
+      "fault_taxonomy": "Node_Termination",
+      "root_cause": "datanode_process_killed",
+      "valid_alternative_labels": ["datanode_crash", "oom_killed_datanode"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"datanode\",\"node\":\"datanode-08\"}": "FATAL org.apache.hadoop.hdfs.server.datanode.DataNode: Initialization failed for Block pool <BP-772899-10.0.0.1-132>.\njava.lang.OutOfMemoryError: Java heap space\nkernel: [498112.9] Out of memory: Kill process 18239 (java/datanode) score 852 or sacrifice child\n",
+        "GetMetrics:{\"service\":\"datanode\",\"node\":\"datanode-08\"}": "{\"process_status\": \"stopped\", \"exit_code\": 137, \"heap_used_mb\": 8192, \"heap_max_mb\": 8192}"
+      }
+    },
+    {
+      "case_key": "hdfs/network_partition/1",
+      "case_id": "3",
+      "system": "hdfs",
+      "category": "network",
+      "namespace": "hadoop",
+      "difficulty": "medium",
+      "query": "Heartbeat loss and degraded pipeline streaming across rack boundary.",
+      "fault_object": "network/rack-switch-02",
+      "fault_taxonomy": "Network_Partition",
+      "root_cause": "rack_switch_packet_loss",
+      "valid_alternative_labels": ["network_disconnect", "datanode_heartbeat_timeout"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"namenode\"}": "INFO org.apache.hadoop.hdfs.server.namenode.FSNamesystem: DataNode 10.0.2.14:50010 heartbeats expired. Dead nodes count: 4\nWARN org.apache.hadoop.hdfs.StateChange: BLOCK* ask 10.0.1.10:50010 to replicate blk_31920 to 1 datanodes\n",
+        "GetMetrics:{\"service\":\"network\",\"rack\":\"rack-02\"}": "{\"packet_loss_pct\": 42.8, \"rtt_p99_ms\": 3200, \"dropped_packets\": 8912}"
+      }
+    },
+    {
+      "case_key": "hdfs/memory_exhaustion/1",
+      "case_id": "4",
+      "system": "hdfs",
+      "category": "performance",
+      "namespace": "hadoop",
+      "difficulty": "hard",
+      "query": "NameNode responsiveness stall and GC pause blocking client RPCs.",
+      "fault_object": "namenode-primary",
+      "fault_taxonomy": "Resource_Exhaustion",
+      "root_cause": "namenode_gc_pause",
+      "valid_alternative_labels": ["jvm_heap_exhaustion", "namenode_stall"],
+      "tool_cache": {
+        "GetLogs:{\"service\":\"namenode\"}": "[GC (Allocation Failure) [PSYoungGen: 8388608K->1048576K(9437184K)] 25165824K->22020096K(25165824K), 18.4281924 secs] [Times: user=72.11 sys=1.24, real=18.43 secs]\nWARN org.apache.hadoop.ipc.Server: IPC Server Responder: thread Interrupted\n",
+        "GetMetrics:{\"service\":\"namenode\"}": "{\"gc_pause_ms\": 18428, \"active_rpc_queue_size\": 4810, \"jvm_heap_utilization_pct\": 98.2}"
+      }
+    }
+  ]
+}

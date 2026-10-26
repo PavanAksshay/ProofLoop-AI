@@ -79,7 +79,7 @@ export const AGENT_METADATA: Record<AgentNodeId, AgentNodeMetadata> = {
     role: 'Invariant Multi-Check Prover (Zero False-Green)',
     workflowStage: 'INDEPENDENT VERIFICATION',
     description: 'Executes independent synthetic transaction probes and invariant assertions. Never relies on shallow HTTP 200 health signals.',
-    position3D: [0, -2.1, 0],
+    position3D: [0, -2.85, 0],
     colorKey: 'stateCompleted',
   },
 };

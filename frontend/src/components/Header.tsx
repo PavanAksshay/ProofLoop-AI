@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Activity, Terminal, Compass, History, ShieldAlert, TrendingUp, Boxes } from 'lucide-react';
+import { ShieldCheck, Activity, Terminal, Compass, History, ShieldAlert, Boxes } from 'lucide-react';
 import { HealthResponse } from '../types';
 
 export type ActiveViewKey = 'dashboard' | 'operations' | 'agent_engine' | 'investigations' | 'incidents' | 'approvals' | 'benchmark';
@@ -50,20 +50,6 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <button
                 type="button"
-                onClick={() => onSelectView('dashboard')}
-                className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
-                  activeView === 'dashboard'
-                    ? 'bg-[#1C1917] text-[#FAF6F0]'
-                    : 'bg-transparent text-[#6B6255] hover:text-[#1C1917] hover:bg-[#FAF6F0]'
-                }`}
-                aria-label="Analytics Dashboard View"
-              >
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>// 00 DASHBOARD</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={() => onSelectView('operations')}
                 className={`px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
                   activeView === 'operations'
@@ -101,7 +87,7 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label="Investigations View"
               >
                 <Compass className="w-3.5 h-3.5" />
-                <span>// 02 INVESTIGATIONS</span>
+                <span>// 03 INVESTIGATIONS</span>
               </button>
 
               <button
@@ -115,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label="Incidents View"
               >
                 <History className="w-3.5 h-3.5" />
-                <span>// 03 INCIDENTS</span>
+                <span>// 04 INCIDENTS</span>
               </button>
 
               <button
@@ -129,7 +115,7 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label="Approvals View"
               >
                 <ShieldAlert className="w-3.5 h-3.5" />
-                <span>// 04 APPROVALS</span>
+                <span>// 05 APPROVALS</span>
                 {pendingApprovalsCount > 0 && (
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse ml-0.5" />
                 )}
@@ -146,7 +132,7 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label="Benchmark View"
               >
                 <Terminal className="w-3.5 h-3.5" />
-                <span>// 05 BENCHMARK</span>
+                <span>// 06 BENCHMARK</span>
               </button>
             </nav>
           </div>

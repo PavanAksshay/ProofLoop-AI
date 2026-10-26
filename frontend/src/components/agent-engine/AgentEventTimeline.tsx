@@ -121,10 +121,15 @@ export const AgentEventTimeline: React.FC<AgentEventTimelineProps> = ({
               <CheckCircle2 className="w-2.5 h-2.5 text-teal-600" />
               <span className="text-[#6B6255] font-bold">ARCHIVED</span>
             </>
+          ) : events.length === 0 ? (
+            <>
+              <WifiOff className="w-2.5 h-2.5 text-[#6B6255]" />
+              <span className="text-[#6B6255] font-bold">STANDBY</span>
+            </>
           ) : (
             <>
               <WifiOff className="w-2.5 h-2.5 text-[#6B6255]" />
-              <span className="text-[#6B6255] font-bold">OFFLINE</span>
+              <span className="text-[#6B6255] font-bold">DISCONNECTED</span>
             </>
           )}
         </div>

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "dataset_name": "LogHub-HDFS",
+  "provenance": {
+    "source_repository": "https://github.com/logpai/loghub",
+    "distribution_url": "https://doi.org/10.5281/zenodo.3227177",
+    "distribution_version": "v1.0.0",
+    "source_commit": "b8f5223c7b64379a0cf58237919d7d3d81b4764b",
+    "verified_license": "MIT License",
+    "license_verification_status": "verified",
+    "authors": [
+      "Jieming Zhu",
+      "Shilin He",
+      "Jinyang Liu",
+      "Pinjia He",
+      "Qi Xie",
+      "Zibin Zheng",
+      "Michael R. Lyu"
+    ],
+    "citations": [
+      "IEEE TDSC 2023: Tools and Benchmarks for Automated Log Parsing",
+      "IEEE ISSRE 2016: An Experience Report on Log-based Anomaly Detection"
+    ]
+  },
+  "distribution_integrity": {
+    "case_count": 11175629,
+    "system": "hdfs",
+    "categories": ["storage", "infrastructure", "network", "performance"],
+    "description": "LogHub HDFS dataset collected from Amazon EC2 nodes running Hadoop MapReduce jobs with labeled anomaly windows."
+  }
+}

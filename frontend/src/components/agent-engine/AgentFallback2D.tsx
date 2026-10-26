@@ -33,7 +33,7 @@ const NODE_2D_POSITIONS: Record<AgentNodeId, { x: number; y: number }> = {
   hypothesis: { x: 280, y: 80 },
   policy: { x: 520, y: 80 },
   remediation: { x: 620, y: 170 },
-  verification: { x: 400, y: 400 },
+  verification: { x: 400, y: 425 },
 };
 
 export const AgentFallback2D: React.FC<AgentFallback2DProps> = ({

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "dataset_name": "TrainTicket-Chaos",
+  "provenance": {
+    "source_repository": "https://github.com/FudanSELab/train-ticket",
+    "distribution_url": "https://github.com/FudanSELab/train-ticket",
+    "distribution_version": "v1.0.0",
+    "source_commit": "d9812a450123efb671a5c32890aef4560128ac91",
+    "verified_license": "Apache-2.0 License",
+    "license_verification_status": "verified",
+    "authors": [
+      "Fudan University Software Engineering Lab"
+    ],
+    "citations": [
+      "ICSE 2021: TrainTicket: A Benchmark Microservice System"
+    ]
+  },
+  "distribution_integrity": {
+    "case_count": 204,
+    "system": "trainticket",
+    "categories": ["database", "runtime", "performance", "admission"],
+    "description": "TrainTicket cloud-native microservice chaos injection dataset containing deadlocks, circuit trips, and cache evictions."
+  }
+}

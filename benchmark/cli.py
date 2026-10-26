@@ -244,9 +244,9 @@ def main() -> None:
 
     parser.add_argument(
         "--dataset",
-        choices=["cloud_opsbench"],
+        choices=["cloud_opsbench", "loghub_hdfs", "rca_eval", "trainticket_chaos"],
         default=None,
-        help="Execute real-world dataset diagnosis evaluation (e.g. cloud_opsbench)",
+        help="Execute real-world dataset diagnosis evaluation (e.g. cloud_opsbench, loghub_hdfs, rca_eval, trainticket_chaos)",
     )
     parser.add_argument(
         "--dataset-path",

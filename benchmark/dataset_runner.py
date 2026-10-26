@@ -52,12 +52,22 @@ def run_dataset_evaluation(
     elif dataset_dir:
         loaded_cases = CloudOpsBenchAdapter.load_from_directory(dataset_dir, max_cases=max_cases)
     else:
-        # Default fallback to sample fixture
-        default_fixture = Path(__file__).resolve().parent.parent / "datasets" / "fixtures" / "cloud_opsbench_sample.json"
+        default_fixtures = {
+            "cloud_opsbench": "cloud_opsbench_sample.json",
+            "cloud-opsbench": "cloud_opsbench_sample.json",
+            "loghub_hdfs": "loghub_hdfs_sample.json",
+            "loghub-hdfs": "loghub_hdfs_sample.json",
+            "rca_eval": "rca_eval_sample.json",
+            "rcaeval": "rca_eval_sample.json",
+            "trainticket_chaos": "trainticket_chaos_sample.json",
+            "trainticket-chaos": "trainticket_chaos_sample.json",
+        }
+        fixture_file = default_fixtures.get(dataset_name.lower().replace(" ", "_"), "cloud_opsbench_sample.json")
+        default_fixture = Path(__file__).resolve().parent.parent / "datasets" / "fixtures" / fixture_file
         if default_fixture.exists():
             loaded_cases = CloudOpsBenchAdapter.load_fixture(default_fixture)
         else:
-            raise ValueError("No cases, fixture, or directory provided for dataset evaluation.")
+            raise ValueError(f"No cases, fixture, or directory provided for dataset evaluation (looked for {default_fixture}).")
 
     if max_cases and len(loaded_cases) > max_cases:
         loaded_cases = loaded_cases[:max_cases]
