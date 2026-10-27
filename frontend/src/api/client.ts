@@ -36,6 +36,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
       headers: {
         'Content-Type': 'application/json',
         'Bypass-Tunnel-Reminder': 'true',
+        'ngrok-skip-browser-warning': 'true',
         ...(options?.headers || {}),
       },
     });
