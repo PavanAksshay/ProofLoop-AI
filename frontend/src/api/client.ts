@@ -35,6 +35,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        'Bypass-Tunnel-Reminder': 'true',
         ...(options?.headers || {}),
       },
     });

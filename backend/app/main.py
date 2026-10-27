@@ -59,13 +59,13 @@ app = FastAPI(
 
 cors_origins_env = os.getenv(
     "PROOFLOOP_CORS_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
+    "*",
 )
 allowed_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=allowed_origins if "*" not in allowed_origins else ["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
